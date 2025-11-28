@@ -38,7 +38,8 @@ class ProjectRepositoryImpl @Inject constructor(
 
     // --- 1. LECTURA DE PROYECTOS (Fuente Única de Verdad) ---
     override fun getProjects(): Flow<Response<List<Project>>> = channelFlow {
-        if (userId.isBlank()) {
+        val currentUserId = userId // Capturamos el ID al inicio del flujo
+        if (currentUserId.isBlank()) {
             send(Response.Failure(Exception("Usuario no autenticado")))
             close()
             return@channelFlow
@@ -57,7 +58,7 @@ class ProjectRepositoryImpl @Inject constructor(
         }
 
         // B) Escuchar Firebase -> Actualiza BD Local en segundo plano
-        val ref = db.reference.child("projects").child(userId)
+        val ref = db.reference.child("projects").child(currentUserId)
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 launch {
@@ -66,6 +67,7 @@ class ProjectRepositoryImpl @Inject constructor(
                             it.getValue(ProjectFirebaseDto::class.java)?.toDomain()
                         }
                         // Al guardar en local, Room dispara el bloque A) automáticamente
+                        // NOTA: Idealmente aquí deberíamos sincronizar borrados también (si no está en nube, borrar local)
                         projectsFromCloud.forEach { project ->
                             saveProjectLocally(project)
                         }
@@ -126,6 +128,7 @@ class ProjectRepositoryImpl @Inject constructor(
                 Log.w("ProjectRepo", "Firebase tardó mucho. Continuando con guardado local...")
             } catch (e: Exception) {
                 Log.e("ProjectRepo", "Error al escribir en Firebase", e)
+                // Opcional: Si falla Firebase, ¿queremos fallar todo? Por ahora permitimos local.
             }
 
             // Guardado Local (Crítico para actualización inmediata)
@@ -179,23 +182,42 @@ class ProjectRepositoryImpl @Inject constructor(
         memberDao.saveProjectMembers(project.id, memberEntities)
     }
 
-    // --- 4. ELIMINAR PROYECTO (CORREGIDO) ---
+    // --- 4. ELIMINAR PROYECTO (CORREGIDO Y ROBUSTO) ---
     override suspend fun deleteProject(projectId: String): Response<Boolean> {
         return try {
-            // CORRECCIÓN: Usamos getProjectWithDetailsById porque getProjectById no existe en DAO
+            val currentUserId = userId
+            if (currentUserId.isBlank()) {
+                Log.e("ProjectRepo", "Intento de eliminar sin usuario logueado")
+                return Response.Failure(Exception("Usuario no autenticado"))
+            }
+
+            Log.d("ProjectRepo", "Iniciando eliminación de proyecto: $projectId para usuario: $currentUserId")
+
+            // 1. Eliminar de FIREBASE (Prioridad alta para consistencia)
+            try {
+                Log.d("ProjectRepo", "Borrando de Firebase...")
+                db.reference.child("projects").child(currentUserId).child(projectId).removeValue().await()
+                Log.d("ProjectRepo", "Borrado de Firebase exitoso.")
+            } catch (e: Exception) {
+                Log.e("ProjectRepo", "Error al borrar de Firebase", e)
+                // Decidimos si queremos abortar o continuar borrando localmente.
+                // Si fallamos aquí, lanzamos error para que el usuario sepa que algo anduvo mal.
+                return Response.Failure(Exception("Error al eliminar de la nube: ${e.message}"))
+            }
+
+            // 2. Eliminar LOCAL (Room)
             val details = projectDao.getProjectWithDetailsById(projectId)
-
-            // Si existe en local, borramos la entidad principal (Room borrará lo demás por Cascada)
             if (details != null) {
+                Log.d("ProjectRepo", "Borrando de Room...")
                 projectDao.deleteProject(details.project)
+                Log.d("ProjectRepo", "Borrado local exitoso.")
+            } else {
+                Log.w("ProjectRepo", "El proyecto no existía localmente, se omitió borrado Room.")
             }
 
-            // Borrar de la nube
-            if (userId.isNotBlank()) {
-                db.reference.child("projects").child(userId).child(projectId).removeValue().await()
-            }
             Response.Success(true)
         } catch (e: Exception) {
+            Log.e("ProjectRepo", "Excepción fatal al eliminar proyecto", e)
             Response.Failure(e)
         }
     }
