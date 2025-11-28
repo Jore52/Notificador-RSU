@@ -9,4 +9,7 @@ interface ProjectRepository {
     suspend fun getProjectById(projectId: String): Response<Project>
     suspend fun saveProject(project: Project): Response<Boolean>
     suspend fun deleteProject(projectId: String): Response<Boolean>
+
+    // CORRECCIÓN: Agregado 'suspend' aquí para coincidir con la implementación
+    suspend fun clearLocalData()
 }

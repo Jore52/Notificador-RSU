@@ -35,14 +35,12 @@ class ProjectsListViewModel @Inject constructor(
     private val firebaseAuth: FirebaseAuth
 ) : ViewModel() {
 
-    // Se especifica el tipo explícitamente para ayudar a la inferencia
     private val _sortState = MutableStateFlow<Pair<SortType, SortOrder>>(Pair(SortType.DEFAULT, SortOrder.ASC))
     private val _localProjects = MutableStateFlow<List<Project>>(emptyList())
     private val _searchQuery = MutableStateFlow("")
 
     val currentUser: StateFlow<FirebaseUser?> = authRepository.currentUser
 
-    // CORRECCIÓN PRINCIPAL: Tipos explícitos en los parámetros de la lambda
     val uiState: StateFlow<ProjectsListUiState> = combine(
         _sortState,
         projectRepository.getProjects(),
@@ -55,14 +53,11 @@ class ProjectsListViewModel @Inject constructor(
         when (projectsResponse) {
             is Response.Loading -> ProjectsListUiState(isLoading = true)
             is Response.Success<*> -> {
-                // Cast seguro de la respuesta genérica
                 @Suppress("UNCHECKED_CAST")
                 val projects = projectsResponse.data as List<Project>
 
-                // 1. Determinar lista base
                 var sourceList = if (localList.isEmpty() || localList.size != projects.size) projects else localList
 
-                // 2. Filtrar
                 if (query.isNotBlank()) {
                     sourceList = sourceList.filter {
                         it.name.contains(query, ignoreCase = true) ||
@@ -70,7 +65,6 @@ class ProjectsListViewModel @Inject constructor(
                     }
                 }
 
-                // 3. Ordenar
                 val sortedProjects = when (currentSortType) {
                     SortType.DEFAULT -> {
                         if (currentSortOrder == SortOrder.ASC) sourceList.sortedBy { it.name }
@@ -82,7 +76,6 @@ class ProjectsListViewModel @Inject constructor(
                     }
                 }
 
-                // Actualizar lista local si es la carga inicial
                 if (localList.isEmpty() && query.isBlank()) {
                     _localProjects.value = sortedProjects
                 }
@@ -103,11 +96,19 @@ class ProjectsListViewModel @Inject constructor(
         initialValue = ProjectsListUiState(isLoading = true)
     )
 
+    // --- FUNCIÓN DE LOGOUT CORREGIDA ---
     fun onLogoutClicked(onLogoutComplete: () -> Unit) {
-        firebaseAuth.signOut()
-        googleSignInClient.signOut().addOnCompleteListener {
-            authRepository.logout()
-            onLogoutComplete()
+        viewModelScope.launch {
+            // 1. Limpiamos la base de datos local (Room)
+            // Esto asegura que el próximo usuario no vea datos antiguos
+            projectRepository.clearLocalData()
+
+            // 2. Cerramos sesión en Firebase y Google
+            firebaseAuth.signOut()
+            googleSignInClient.signOut().addOnCompleteListener {
+                authRepository.logout()
+                onLogoutComplete()
+            }
         }
     }
 
