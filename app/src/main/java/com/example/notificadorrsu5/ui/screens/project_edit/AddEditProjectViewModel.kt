@@ -1,7 +1,7 @@
 package com.example.notificadorrsuv5.ui.screens.project_edit
 
 import android.content.Context
-import android.content.Intent // <--- IMPORTANTE
+import android.content.Intent
 import android.media.MediaPlayer
 import android.net.Uri
 import android.util.Log
@@ -18,7 +18,7 @@ import com.example.notificadorrsuv5.domain.util.FileNameResolver
 import com.example.notificadorrsuv5.domain.util.GmailApiService
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
-import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException // <--- IMPORTANTE
+import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException
 import com.google.api.client.http.InputStreamContent
 import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
@@ -43,13 +43,14 @@ data class AddEditProjectUiState(
     val project: Project = Project(),
     val isLoading: Boolean = true,
     val isSaving: Boolean = false,
-    val isProjectSaved: Boolean = false,
+    val isProjectSaved: Boolean = false, // Sirve para cerrar pantalla tras guardar O eliminar
     val isConditionDialogVisible: Boolean = false,
     val editableCondition: ConditionModel? = null,
     val isUploadingFile: Boolean = false,
     val notificationMessage: String? = null,
     val notificationType: NotificationType = NotificationType.SUCCESS,
-    val authRecoverIntent: Intent? = null // <--- NUEVO CAMPO PARA EL INTENT DE RECUPERACIÓN
+    val authRecoverIntent: Intent? = null,
+    val isEditing: Boolean = false // <--- NUEVO CAMPO: Indica si estamos editando un proyecto existente
 )
 
 @HiltViewModel
@@ -65,15 +66,21 @@ class AddEditProjectViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val projectId: String? = savedStateHandle.get<String>("projectId")
+
     private val _uiState = MutableStateFlow(AddEditProjectUiState())
     val uiState: StateFlow<AddEditProjectUiState> = _uiState.asStateFlow()
+
     private var notificationJob: Job? = null
 
     init {
-        if (projectId != null && projectId != "-1" && projectId.isNotBlank()) {
-            loadProjectData(projectId)
+        // Lógica para determinar si es edición o creación
+        val isEditing = projectId != null && projectId != "-1" && projectId.isNotBlank()
+
+        if (isEditing) {
+            loadProjectData(projectId!!)
+            _uiState.update { it.copy(isEditing = true) }
         } else {
-            _uiState.update { it.copy(isLoading = false, project = Project(id = UUID.randomUUID().toString())) }
+            _uiState.update { it.copy(isLoading = false, project = Project(id = UUID.randomUUID().toString()), isEditing = false) }
         }
     }
 
@@ -90,6 +97,31 @@ class AddEditProjectViewModel @Inject constructor(
                     showNotification(response.e?.message ?: "Error al cargar", NotificationType.ERROR)
                 }
                 else -> _uiState.update { it.copy(isLoading = false) }
+            }
+        }
+    }
+
+    // --- NUEVA FUNCIÓN: ELIMINAR PROYECTO ---
+    fun onDeleteProject() {
+        val currentProjectId = _uiState.value.project.id
+        if (currentProjectId.isBlank()) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSaving = true) } // Mostramos carga mientras borra
+
+            // El repositorio se encarga de borrar en Local (Room) y Firebase
+            when (val result = projectRepository.deleteProject(currentProjectId)) {
+                is Response.Success<*> -> {
+                    showNotification("Proyecto eliminado correctamente", NotificationType.SUCCESS)
+                    delay(1000) // Breve pausa para leer el mensaje
+                    // Activamos la bandera para salir de la pantalla
+                    _uiState.update { it.copy(isProjectSaved = true, isSaving = false) }
+                }
+                is Response.Failure -> {
+                    _uiState.update { it.copy(isSaving = false) }
+                    showNotification("Error al eliminar: ${result.e?.message}", NotificationType.ERROR)
+                }
+                else -> _uiState.update { it.copy(isSaving = false) }
             }
         }
     }
@@ -111,7 +143,7 @@ class AddEditProjectViewModel @Inject constructor(
 
             when (val result = projectRepository.saveProject(project)) {
                 is Response.Success<*> -> {
-                    showNotification("Proyecto guardado. Enviando notificaciones...", NotificationType.SUCCESS)
+                    showNotification("Proyecto guardado correctamente", NotificationType.SUCCESS)
                     CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                         try {
                             performImmediateConditionCheck(project)
@@ -159,7 +191,6 @@ class AddEditProjectViewModel @Inject constructor(
                 val subject = condition.subject
                 val body = condition.body.replacePlaceholders(project)
 
-                // CAPTURA DE ERROR DE AUTENTICACIÓN
                 val emailResult = gmailApiService.sendEmail(
                     googleAccount,
                     project.coordinatorEmail,
@@ -172,7 +203,7 @@ class AddEditProjectViewModel @Inject constructor(
                     val exception = emailResult.exceptionOrNull()
                     if (exception is UserRecoverableAuthIOException) {
                         _uiState.update { it.copy(authRecoverIntent = exception.intent) }
-                        return // Salimos para que el usuario acepte el permiso
+                        return
                     } else {
                         playSound(R.raw.error_sound)
                         showNotification("Error envío: ${exception?.message}", NotificationType.ERROR)
@@ -182,38 +213,56 @@ class AddEditProjectViewModel @Inject constructor(
                     showNotification("Correo enviado con éxito", NotificationType.SUCCESS)
                 }
 
-                // Guardamos historial independientemente
                 saveEmailToHistory(project, condition.id, subject, body, emailResult.isSuccess, emailResult.exceptionOrNull()?.message)
             }
         }
     }
 
-    // ... (saveEmailToHistory, playSound, replacePlaceholders se mantienen igual)
     private suspend fun saveEmailToHistory(project: Project, conditionId: String, subject: String, body: String, isSuccess: Boolean, errorMessage: String?) {
         val sentAt = LocalDateTime.now()
-        val entity = SentEmailEntity(projectId = project.id, conditionId = conditionId, recipientEmail = project.coordinatorEmail, subject = subject, body = body, sentAt = sentAt, wasSuccessful = isSuccess, errorMessage = errorMessage)
+        val entity = SentEmailEntity(
+            projectId = project.id,
+            conditionId = conditionId,
+            recipientEmail = project.coordinatorEmail,
+            subject = subject,
+            body = body,
+            sentAt = sentAt,
+            wasSuccessful = isSuccess,
+            errorMessage = errorMessage
+        )
         try { sentEmailDao.insertSentEmail(entity) } catch (e: Exception) { Log.e("Room", "Error", e) }
 
         val userId = authRepository.currentUser.value?.uid
         if (userId != null) {
             try {
                 val historyRef = firebaseDatabase.reference.child("users").child(userId).child("sent_emails").push()
-                val firebaseMap = mapOf<String, Any>("projectId" to project.id, "projectName" to project.name, "recipient" to project.coordinatorEmail, "subject" to subject, "sentAt" to sentAt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME), "success" to isSuccess, "error" to (errorMessage ?: ""))
+                val firebaseMap = mapOf<String, Any>(
+                    "projectId" to project.id,
+                    "projectName" to project.name,
+                    "recipient" to project.coordinatorEmail,
+                    "subject" to subject,
+                    "sentAt" to sentAt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+                    "success" to isSuccess,
+                    "error" to (errorMessage ?: "")
+                )
                 historyRef.setValue(firebaseMap)
             } catch (e: Exception) { Log.e("Firebase", "Error", e) }
         }
     }
 
     private fun playSound(soundResId: Int) {
-        try { MediaPlayer.create(context, soundResId).apply { setOnCompletionListener { release() }; start() } } catch (e: Exception) { e.printStackTrace() }
+        try {
+            val mediaPlayer = MediaPlayer.create(context, soundResId)
+            mediaPlayer.setOnCompletionListener { it.release() }
+            mediaPlayer.start()
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun String.replacePlaceholders(project: Project): String {
-        return this.replace("{nombreCoordinador}", project.coordinatorName).replace("{nombreProyecto}", project.name).replace("{diasRestantes}", project.deadlineDays.toString())
+        return this.replace("{nombreCoordinador}", project.coordinatorName)
+            .replace("{nombreProyecto}", project.name)
+            .replace("{diasRestantes}", project.deadlineDays.toString())
     }
-
-    // --- SUBIDA A DRIVE CON MANEJO DE ERROR DE AUTH ---
-// ... dentro de AddEditProjectViewModel
 
     fun onFileAttached(uri: Uri, isDialog: Boolean) {
         _uiState.update { it.copy(isUploadingFile = true) }
@@ -227,14 +276,13 @@ class AddEditProjectViewModel @Inject constructor(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // ... (Configuración de credenciales igual que antes) ...
                 val credential = GoogleAccountCredential.usingOAuth2(context, Collections.singleton(DriveScopes.DRIVE_FILE))
                 credential.selectedAccount = account.account
+
                 val driveService = Drive.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
                     .setApplicationName("Notificador RSU V5").build()
 
-                // ... (Lectura del archivo igual que antes) ...
-                val name = fileNameResolver.getFileName(uri) // Obtenemos el nombre real (ej. "informe.pdf")
+                val name = fileNameResolver.getFileName(uri)
                 val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
                 val fileMetadata = File().apply { this.name = name }
                 val inputStream = context.contentResolver.openInputStream(uri) ?: throw Exception("No se pudo leer archivo")
@@ -244,13 +292,8 @@ class AddEditProjectViewModel @Inject constructor(
                     .setFields("id, webViewLink")
                     .execute()
 
-                val rawLink = file.webViewLink ?: "https://drive.google.com/file/d/${file.id}/view"
-
-                // --- CAMBIO CLAVE AQUÍ ---
-                // Guardamos: "NombreDelArchivo|Enlace"
-                val combinedData = "$name|$rawLink"
-
-                Log.d("DriveUpload", "Guardando: $combinedData")
+                val driveLink = file.webViewLink ?: "https://drive.google.com/file/d/${file.id}/view"
+                val combinedData = "$name|$driveLink"
 
                 withContext(Dispatchers.Main) {
                     if (isDialog) {
@@ -262,11 +305,10 @@ class AddEditProjectViewModel @Inject constructor(
                         onProjectChange(p.copy(attachedFileUris = p.attachedFileUris + combinedData))
                     }
                     _uiState.update { it.copy(isUploadingFile = false) }
-                    showNotification("Archivo subido: $name", NotificationType.SUCCESS)
+                    showNotification("Archivo subido a Drive", NotificationType.SUCCESS)
                 }
 
             } catch (e: Exception) {
-                // ... (Manejo de errores igual que antes) ...
                 if (e is UserRecoverableAuthIOException) {
                     _uiState.update { it.copy(isUploadingFile = false, authRecoverIntent = e.intent) }
                 } else {
@@ -280,10 +322,11 @@ class AddEditProjectViewModel @Inject constructor(
         }
     }
 
-    // (onFileRemoved y demás métodos auxiliares iguales...)
     fun onFileRemoved(url: String, isDialog: Boolean) {
         if (isDialog) {
-            _uiState.value.editableCondition?.let { onEditableConditionChange(it.copy(attachmentUris = it.attachmentUris - url)) }
+            _uiState.value.editableCondition?.let {
+                onEditableConditionChange(it.copy(attachmentUris = it.attachmentUris - url))
+            }
         } else {
             val p = _uiState.value.project
             onProjectChange(p.copy(attachedFileUris = p.attachedFileUris - url))
