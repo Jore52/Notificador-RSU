@@ -4,9 +4,10 @@ import android.content.Context
 import android.util.Base64
 import android.util.Log
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
-import com.google.api.client.googleapis.json.GoogleJsonResponseException
 import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
+import com.google.api.services.drive.Drive
+import com.google.api.services.drive.DriveScopes
 import com.google.api.services.gmail.Gmail
 import com.google.api.services.gmail.GmailScopes
 import com.google.api.services.gmail.model.Message
@@ -15,8 +16,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
-import java.net.URL
 import java.util.Properties
+import java.util.regex.Pattern
 import javax.activation.DataHandler
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -40,97 +41,103 @@ class GmailApiService @Inject constructor(
         attachmentUris: List<String>
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            // 1. Limpieza y Validación del Destinatario
-            val cleanTo = to.trim().replace("\n", "").replace("\r", "")
+            val cleanTo = to.trim()
 
-            if (cleanTo.isBlank() || !cleanTo.contains("@")) {
-                Log.e("GmailApiService", "Error: El destinatario '$cleanTo' no es válido.")
-                return@withContext Result.failure(IllegalArgumentException("Correo destinatario inválido"))
-            }
+            // 1. Configurar Credenciales (Sirve para Gmail y Drive porque usamos la misma cuenta)
+            val credential = GoogleAccountCredential.usingOAuth2(
+                context,
+                setOf(GmailScopes.GMAIL_SEND, DriveScopes.DRIVE_READONLY) // Agregamos permiso de lectura
+            )
+            credential.selectedAccount = account.account
 
-            // 2. Configuración del Servicio Gmail
-            val credential = GoogleAccountCredential.usingOAuth2(context, setOf(GmailScopes.GMAIL_SEND))
-                .setSelectedAccount(account.account)
+            // 2. Servicios
             val gmailService = Gmail.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
                 .setApplicationName("Notificador RSU V5").build()
 
-            // 3. Creación del Mensaje MIME
+            val driveService = Drive.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
+                .setApplicationName("Notificador RSU V5").build()
+
+            // 3. Crear Email
             val props = Properties()
             val session = Session.getDefaultInstance(props, null)
             val mimeMessage = MimeMessage(session)
-
             mimeMessage.setFrom(InternetAddress(account.email))
             mimeMessage.addRecipient(javax.mail.Message.RecipientType.TO, InternetAddress(cleanTo))
             mimeMessage.subject = subject
 
-            // 4. Estructura Multipart (Para Texto + Adjuntos)
             val multipart = MimeMultipart("mixed")
 
-            // A) Parte del Texto
-            val messageBodyPart = MimeBodyPart()
-            messageBodyPart.setText(body, "utf-8")
-            multipart.addBodyPart(messageBodyPart)
+            // Parte Texto
+            val textPart = MimeBodyPart()
+            textPart.setText(body, "utf-8")
+            multipart.addBodyPart(textPart)
 
-            // B) Parte de Adjuntos (Descarga y Adjunta)
-            attachmentUris.forEachIndexed { index, urlString ->
+            // 4. Procesar Adjuntos (Drive)
+            attachmentUris.forEach { url ->
                 try {
-                    Log.d("GmailApiService", "Descargando adjunto: $urlString")
+                    val fileId = extractDriveFileId(url)
+                    if (fileId != null) {
+                        Log.d("GmailAttach", "Descargando archivo de Drive ID: $fileId")
 
-                    // Descargamos el archivo desde la URL a un ByteArray
-                    val url = URL(urlString)
-                    val byteArray = url.openStream().use { it.readBytes() }
+                        // Obtener metadatos (nombre)
+                        val driveFile = driveService.files().get(fileId).setFields("name, mimeType").execute()
+                        val fileName = driveFile.name ?: "adjunto_drive"
 
-                    // Intentamos deducir el nombre del archivo de la URL
-                    val fileName = urlString.substringAfterLast('/').takeIf { it.isNotEmpty() } ?: "archivo_adjunto_$index"
+                        // Descargar contenido
+                        val outputStream = ByteArrayOutputStream()
+                        driveService.files().get(fileId).executeMediaAndDownloadTo(outputStream)
+                        val byteArray = outputStream.toByteArray()
 
-                    // Creamos el DataSource con los bytes descargados
-                    val dataSource = ByteArrayDataSource(byteArray, "application/octet-stream")
+                        // Adjuntar
+                        val dataSource = ByteArrayDataSource(byteArray, driveFile.mimeType ?: "application/octet-stream")
+                        val attachmentPart = MimeBodyPart()
+                        attachmentPart.dataHandler = DataHandler(dataSource)
+                        attachmentPart.fileName = fileName
+                        multipart.addBodyPart(attachmentPart)
 
-                    val attachmentBodyPart = MimeBodyPart()
-                    attachmentBodyPart.dataHandler = DataHandler(dataSource)
-                    attachmentBodyPart.fileName = fileName
-
-                    multipart.addBodyPart(attachmentBodyPart)
-                    Log.d("GmailApiService", "Adjunto '$fileName' agregado correctamente.")
-
+                    } else {
+                        // Si no es link de Drive, lo ponemos como texto
+                        val linkPart = MimeBodyPart()
+                        linkPart.setText("\n[Enlace externo: $url]\n")
+                        multipart.addBodyPart(linkPart)
+                    }
                 } catch (e: Exception) {
-                    Log.e("GmailApiService", "Error al descargar/adjuntar archivo: $urlString", e)
-                    // Agregamos una nota al texto si falla un adjunto específico, para que el usuario sepa
-                    val errorPart = MimeBodyPart()
-                    errorPart.setText("\n[Error al adjuntar archivo: $urlString]\n")
-                    multipart.addBodyPart(errorPart)
+                    Log.e("GmailAttach", "Error adjuntando $url", e)
+                    val errPart = MimeBodyPart()
+                    errPart.setText("\n[Error al adjuntar archivo: $url]\n")
+                    multipart.addBodyPart(errPart)
                 }
             }
 
-            // Asignamos el contenido Multipart al mensaje
             mimeMessage.setContent(multipart)
 
-            // 5. Codificación y Envío
+            // 5. Enviar
             val buffer = ByteArrayOutputStream()
             mimeMessage.writeTo(buffer)
-            val rawMessageBytes = buffer.toByteArray()
-            val encodedEmail = Base64.encodeToString(rawMessageBytes, Base64.URL_SAFE or Base64.NO_WRAP)
+            val rawMessage = Base64.encodeToString(buffer.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
 
-            val message = Message().setRaw(encodedEmail)
-
+            val message = Message().setRaw(rawMessage)
             gmailService.users().messages().send("me", message).execute()
 
-            Log.d("GmailApiService", "Correo con adjuntos enviado exitosamente a $cleanTo")
             Result.success(Unit)
-
-        } catch (e: GoogleJsonResponseException) {
-            val errorDetails = e.details
-            val errorMessage = errorDetails?.message ?: e.message
-
-            Log.e("GmailApiService", "--- ERROR GMAIL API ---")
-            Log.e("GmailApiService", "Código: ${e.statusCode}")
-            Log.e("GmailApiService", "Mensaje: $errorMessage")
-
-            Result.failure(Exception("Error Gmail API: $errorMessage"))
-
         } catch (e: Exception) {
-            Log.e("GmailApiService", "Error general enviando correo", e)
+            Log.e("GmailApiService", "Error fatal", e)
             Result.failure(e)
         }
+    }
+
+    private fun extractDriveFileId(url: String): String? {
+        // Patrones comunes de URL de Drive
+        val patterns = listOf(
+            Pattern.compile("/file/d/([^/]+)"),
+            Pattern.compile("id=([^&]+)")
+        )
+        for (p in patterns) {
+            val matcher = p.matcher(url)
+            if (matcher.find()) {
+                return matcher.group(1)
+            }
+        }
+        return null
     }
 }
