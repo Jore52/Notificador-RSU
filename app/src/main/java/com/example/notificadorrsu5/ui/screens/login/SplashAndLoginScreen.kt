@@ -14,7 +14,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,7 +38,6 @@ import com.google.android.gms.common.api.Scope
 import com.google.api.services.gmail.GmailScopes
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.sin
 
 private enum class ScreenState { Splash, Login }
@@ -52,7 +50,9 @@ fun SplashAndLoginScreen(
     var screenState by remember { mutableStateOf(ScreenState.Splash) }
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
-    val firebaseAuth = FirebaseAuth.getInstance()
+
+    // Obtenemos el usuario directamente de Firebase para la comprobación rápida del Splash
+    val currentUser = FirebaseAuth.getInstance().currentUser
 
     val gso = remember {
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
@@ -62,6 +62,7 @@ fun SplashAndLoginScreen(
             .build()
     }
     val googleSignInClient = remember { GoogleSignIn.getClient(context, gso) }
+
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -81,13 +82,15 @@ fun SplashAndLoginScreen(
             }
         } else {
             viewModel.onSignInError()
-            Toast.makeText(context, "Inicio de sesión cancelado.", Toast.LENGTH_SHORT).show()
+            // Comentado para no molestar si el usuario solo da atrás
+            // Toast.makeText(context, "Inicio de sesión cancelado.", Toast.LENGTH_SHORT).show()
         }
     }
 
     LaunchedEffect(Unit) {
-        delay(1000L) // Shortened delay for quicker check
-        if (firebaseAuth.currentUser != null) {
+        delay(1500L) // Un poco de delay para ver el logo
+        // Como arreglamos el AuthRepository, ahora es seguro navegar si currentUser existe
+        if (currentUser != null) {
             onLoginSuccess()
         } else {
             screenState = ScreenState.Login
@@ -121,7 +124,6 @@ fun SplashAndLoginScreen(
             Icon(
                 painter = painterResource(id = R.drawable.logo_drsu_2),
                 contentDescription = "Logo Institucional",
-                // --- AJUSTE DE TAMAÑO PARA EVITAR DISTORSIÓN ---
                 modifier = Modifier.fillMaxWidth(0.8f),
                 tint = Color.White
             )
@@ -134,20 +136,22 @@ fun SplashAndLoginScreen(
             )
         }
 
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset(y = 80.dp)
-                .padding(horizontal = 32.dp)
-                .alpha(buttonAlpha)
-        ) {
-            LoginButton(
-                isLoading = uiState.isLoading,
-                onClick = {
-                    viewModel.onSignInInitiated()
-                    signInLauncher.launch(googleSignInClient.signInIntent)
-                }
-            )
+        if (screenState == ScreenState.Login) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .offset(y = 80.dp)
+                    .padding(horizontal = 32.dp)
+                    .alpha(buttonAlpha)
+            ) {
+                LoginButton(
+                    isLoading = uiState.isLoading,
+                    onClick = {
+                        viewModel.onSignInInitiated()
+                        signInLauncher.launch(googleSignInClient.signInIntent)
+                    }
+                )
+            }
         }
     }
 }

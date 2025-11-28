@@ -1,5 +1,8 @@
 package com.example.notificadorrsuv5.data.repository
 
+import com.example.notificadorrsuv5.data.local.ConditionDao
+import com.example.notificadorrsuv5.data.local.ProjectDao
+import com.example.notificadorrsuv5.data.local.ProjectEntity
 import com.example.notificadorrsuv5.domain.model.Project
 import com.example.notificadorrsuv5.domain.model.Response
 import com.example.notificadorrsuv5.domain.repository.AuthRepository
@@ -12,13 +15,15 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import java.time.LocalDate
+import java.util.UUID
 import javax.inject.Inject
 
 class ProjectRepositoryImpl @Inject constructor(
     private val db: FirebaseDatabase,
     private val authRepository: AuthRepository,
-    private val projectDao: ProjectDao, // <-- INYECTAR DAO
-    private val conditionDao: ConditionDao // <-- INYECTAR DAO DE CONDICIONES
+    private val projectDao: ProjectDao, // Ahora sí se reconoce esta clase
+    private val conditionDao: ConditionDao // Ahora sí se reconoce esta clase
 ) : ProjectRepository {
 
     private val userId: String
@@ -57,7 +62,7 @@ class ProjectRepositoryImpl @Inject constructor(
 
     override suspend fun saveProject(project: Project): Response<Boolean> {
         return try {
-            val uid = userId ?: return Response.Failure(Exception("Usuario no logueado"))
+            val uid = userId // El getter ya maneja el nulo con !! o puedes usar safe call aquí si prefieres
 
             // 1. Generar ID si no existe
             val newId = if (project.id.isBlank()) UUID.randomUUID().toString() else project.id
@@ -66,12 +71,11 @@ class ProjectRepositoryImpl @Inject constructor(
             // 2. Guardar en Firebase
             db.reference.child("projects").child(uid).child(newId).setValue(projectWithId).await()
 
-            // 3. Guardar en Room (Local) para que el Worker lo vea
-            // Necesitas mapear de Domain -> Entity. Aquí un ejemplo rápido:
+            // 3. Guardar en Room (Local)
             val entity = projectWithId.toEntity()
             projectDao.insertProject(entity)
 
-            // También guardar condiciones localmente si las hay
+            // TODO: Descomentar y adaptar cuando ConditionDao esté listo y sync con String IDs
             // conditionDao.saveProjectConditions(newId, projectWithId.conditions.map { it.toEntity(newId) })
 
             Response.Success(true)
@@ -100,6 +104,7 @@ class ProjectRepositoryImpl @Inject constructor(
     override suspend fun deleteProject(projectId: String): Response<Boolean> {
         return try {
             db.reference.child("projects").child(userId).child(projectId).removeValue().await()
+            projectDao.deleteProject(ProjectEntity(id = projectId, name="", coordinatorName="", coordinatorEmail="", school="", startDate= LocalDate.now(), endDate= LocalDate.now())) // Borrado local básico
             Response.Success(true)
         } catch (e: Exception) {
             Response.Failure(e)
