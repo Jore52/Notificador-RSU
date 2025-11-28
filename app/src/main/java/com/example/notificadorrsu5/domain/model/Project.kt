@@ -16,24 +16,18 @@ data class Project(
     val deadlineCalculationMethod: DeadlineCalculationMethod = DeadlineCalculationMethod.BUSINESS_DAYS,
     val startDate: LocalDate? = null,
     val endDate: LocalDate? = null,
-    // Días fijos para el informe final (por defecto 10, pero ahora es editable si lo necesitas)
     val fixedDeadlineDaysForCalculation: Int = 10,
     val attachedFileUris: List<String> = emptyList(),
     val conditions: List<ConditionModel> = emptyList(),
-    // [NUEVO] Lista de integrantes agregada al dominio
-    val members: List<MemberModel> = emptyList()
+    val members: List<MemberModel> = emptyList() // Asegurando que esto esté presente
 ) {
 
-    // Calcula la fecha del informe final basándose en la fecha de fin y el método de cálculo
     val finalReportDate: LocalDate?
         get() {
             val localEndDate = endDate ?: return null
-
             if (deadlineCalculationMethod == DeadlineCalculationMethod.CALENDAR_DAYS) {
                 return localEndDate.plusDays(fixedDeadlineDaysForCalculation.toLong())
             }
-
-            // Cálculo de días hábiles (excluye sábados y domingos)
             var tempDate = localEndDate
             var businessDaysToAdd = fixedDeadlineDaysForCalculation
             while (businessDaysToAdd > 0) {
@@ -45,19 +39,17 @@ data class Project(
             return tempDate
         }
 
-    // Calcula cuántos días faltan para la entrega del informe
     val deadlineDays: Long
         get() {
-            val finalDate = finalReportDate ?: return Long.MAX_VALUE
-            val today = LocalDate.now()
+            // CORRECCIÓN AQUÍ: Devolvemos 0 en lugar de Long.MAX_VALUE para evitar el número gigante
+            val finalDate = finalReportDate ?: return 0
 
-            // Si la fecha final ya pasó o es hoy
+            val today = LocalDate.now()
             if (finalDate.isBefore(today)) return ChronoUnit.DAYS.between(today, finalDate)
 
             if (deadlineCalculationMethod == DeadlineCalculationMethod.CALENDAR_DAYS) {
                 return ChronoUnit.DAYS.between(today, finalDate)
             } else {
-                // Conteo de días hábiles restantes
                 var businessDaysLeft: Long = 0
                 var currentDate = today
                 while (currentDate.isBefore(finalDate) || currentDate.isEqual(finalDate)) {
@@ -66,8 +58,6 @@ data class Project(
                     }
                     currentDate = currentDate.plusDays(1)
                 }
-                // Restamos 1 porque el between suele ser exclusivo/inclusivo dependiendo de la lógica exacta deseada,
-                // pero si 'today' cuenta, el cálculo ajustado es:
                 return if (businessDaysLeft > 0) businessDaysLeft - 1 else 0
             }
         }

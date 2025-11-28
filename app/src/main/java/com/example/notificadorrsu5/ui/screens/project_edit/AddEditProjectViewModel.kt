@@ -14,7 +14,6 @@ import com.example.notificadorrsuv5.domain.repository.AuthRepository
 import com.example.notificadorrsuv5.domain.repository.ProjectRepository
 import com.example.notificadorrsuv5.domain.util.GmailApiService
 import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.firebase.storage.FirebaseStorage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +25,9 @@ import kotlinx.coroutines.tasks.await
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import javax.inject.Inject
+import com.cloudinary.android.MediaManager
+import com.cloudinary.android.callback.ErrorInfo
+import com.cloudinary.android.callback.UploadCallback
 
 data class AddEditProjectUiState(
     val project: Project = Project(),
@@ -43,7 +45,7 @@ class AddEditProjectViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val projectRepository: ProjectRepository,
     private val authRepository: AuthRepository,
-    private val storage: FirebaseStorage,
+    private val mediaManager: MediaManager,
     private val gmailApiService: GmailApiService,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -197,46 +199,83 @@ class AddEditProjectViewModel @Inject constructor(
     }
 
     fun onFileAttached(uri: Uri, isDialog: Boolean) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isUploadingFile = true) }
-            val user = authRepository.currentUser.value ?: return@launch
-            val uniqueFileName = "${UUID.randomUUID()}"
-            val storagePath = if (isDialog) "condition_attachments" else "project_attachments"
-            val storageRef = storage.reference.child("$storagePath/${user.uid}/$uniqueFileName")
+        _uiState.update { it.copy(isUploadingFile = true) }
 
-            try {
-                storageRef.putFile(uri).await()
-                val downloadUrl = storageRef.downloadUrl.await().toString()
-                if(isDialog) {
-                    val condition = _uiState.value.editableCondition?.let { it.copy(attachmentUris = it.attachmentUris + downloadUrl) } ?: return@launch
-                    onEditableConditionChange(condition)
-                } else {
-                    onProjectChange(_uiState.value.project.copy(attachedFileUris = _uiState.value.project.attachedFileUris + downloadUrl))
+        val user = authRepository.currentUser.value
+        if (user == null) {
+            _uiState.update { it.copy(error = "Error: Usuario no autenticado.", isUploadingFile = false) }
+            return
+        }
+
+        val folderName = if (isDialog) "uploads/${user.uid}/conditions" else "uploads/${user.uid}/projects"
+
+        // 2. CORRECCIÓN AQUÍ: Usa la variable inyectada 'mediaManager' en vez de 'MediaManager.get()'
+        mediaManager.upload(uri)
+            .unsigned("notificador_preset") // <--- ¡RECUERDA CAMBIAR ESTO POR TU PRESET REAL!
+            .option("folder", folderName)
+            .callback(object : UploadCallback {
+                override fun onStart(requestId: String) {}
+                override fun onProgress(requestId: String, bytes: Long, totalBytes: Long) {}
+
+                override fun onSuccess(requestId: String, resultData: Map<*, *>) {
+                    val downloadUrl = resultData["secure_url"] as? String
+                    if (downloadUrl != null) {
+                        if (isDialog) {
+                            val currentCondition = _uiState.value.editableCondition
+                            if (currentCondition != null) {
+                                val updatedCondition = currentCondition.copy(
+                                    attachmentUris = currentCondition.attachmentUris + downloadUrl
+                                )
+                                onEditableConditionChange(updatedCondition)
+                            }
+                        } else {
+                            val currentProject = _uiState.value.project
+                            val updatedProject = currentProject.copy(
+                                attachedFileUris = currentProject.attachedFileUris + downloadUrl
+                            )
+                            onProjectChange(updatedProject)
+                        }
+                        _uiState.update { it.copy(isUploadingFile = false) }
+                    } else {
+                        _uiState.update { it.copy(error = "Error: No se recibió URL.", isUploadingFile = false) }
+                    }
                 }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(error = "No se pudo subir el archivo.") }
-            } finally {
-                _uiState.update { it.copy(isUploadingFile = false) }
+
+                override fun onError(requestId: String, error: ErrorInfo) {
+                    _uiState.update { it.copy(error = "Error al subir: ${error.description}", isUploadingFile = false) }
+                }
+
+                override fun onReschedule(requestId: String, error: ErrorInfo) {}
+            })
+            .dispatch()
+    }
+
+    // LA FUNCIÓN DE BORRADO (CORREGIDA para quitar Firebase Storage):
+    fun onFileRemoved(url: String, isDialog: Boolean) {
+        viewModelScope.launch {
+            // Ya no intentamos borrar de la nube porque Cloudinary requiere firma para eso.
+            // Simplemente quitamos el link de nuestra lista local y guardamos el proyecto.
+
+            if (isDialog) {
+                val condition = _uiState.value.editableCondition?.let {
+                    it.copy(attachmentUris = it.attachmentUris - url)
+                } ?: return@launch
+                onEditableConditionChange(condition)
+            } else {
+                val project = _uiState.value.project
+                onProjectChange(project.copy(attachedFileUris = project.attachedFileUris - url))
             }
         }
     }
 
-    fun onFileRemoved(url: String, isDialog: Boolean) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isUploadingFile = true) }
-            try {
-                storage.getReferenceFromUrl(url).delete().await()
-                if (isDialog) {
-                    val condition = _uiState.value.editableCondition?.let { it.copy(attachmentUris = it.attachmentUris - url) } ?: return@launch
-                    onEditableConditionChange(condition)
-                } else {
-                    onProjectChange(_uiState.value.project.copy(attachedFileUris = _uiState.value.project.attachedFileUris - url))
-                }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(error = "No se pudo eliminar el archivo.") }
-            } finally {
-                _uiState.update { it.copy(isUploadingFile = false) }
-            }
+    private fun removeFileFromState(url: String, isDialog: Boolean) {
+        if (isDialog) {
+            val condition = _uiState.value.editableCondition?.let {
+                it.copy(attachmentUris = it.attachmentUris - url)
+            } ?: return
+            onEditableConditionChange(condition)
+        } else {
+            onProjectChange(_uiState.value.project.copy(attachedFileUris = _uiState.value.project.attachedFileUris - url))
         }
     }
 

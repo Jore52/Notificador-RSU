@@ -17,11 +17,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.example.notificadorrsuv5.domain.model.ConditionModel
@@ -33,7 +35,7 @@ import com.example.notificadorrsuv5.domain.util.FileNameResolver
 import com.example.notificadorrsuv5.ui.theme.TextSecondary
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
-
+import androidx.compose.ui.text.style.TextOverflow
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddEditProjectScreen(
@@ -195,21 +197,51 @@ fun DatesAndDeadlinesCard(uiState: AddEditProjectUiState, viewModel: AddEditProj
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
-                    value = project.startDate?.format(dateFormatter) ?: "", onValueChange = {},
+                    value = project.startDate?.format(dateFormatter) ?: "",
+                    onValueChange = {},
                     modifier = Modifier.weight(1f).clickable { showDatePicker(project.startDate) { viewModel.onProjectChange(project.copy(startDate = it)) } },
-                    readOnly = true, label = { Text("FECHA DE INICIO") }, enabled = false,
-                    colors = OutlinedTextFieldDefaults.colors(disabledTextColor = LocalContentColor.current.copy(LocalContentColor.current.alpha))
+                    readOnly = true,
+                    label = { Text("FECHA INICIO", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    enabled = false,
+                    colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledContainerColor = Color.Transparent, disabledBorderColor = MaterialTheme.colorScheme.outline)
                 )
                 OutlinedTextField(
-                    value = project.endDate?.format(dateFormatter) ?: "", onValueChange = {},
+                    value = project.endDate?.format(dateFormatter) ?: "",
+                    onValueChange = {},
                     modifier = Modifier.weight(1f).clickable { showDatePicker(project.endDate) { viewModel.onProjectChange(project.copy(endDate = it)) } },
-                    readOnly = true, label = { Text("FECHA DE CULMINACIÓN") }, enabled = false,
-                    colors = OutlinedTextFieldDefaults.colors(disabledTextColor = LocalContentColor.current.copy(LocalContentColor.current.alpha))
+                    readOnly = true,
+                    label = { Text("FECHA CULMINACIÓN", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    enabled = false,
+                    colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledContainerColor = Color.Transparent, disabledBorderColor = MaterialTheme.colorScheme.outline)
                 )
             }
+
+            // FILA 2: Días informe y Fecha final
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(value = project.deadlineDays.toString(), onValueChange = {}, readOnly = true, label = { Text("DÍAS PARA INFORME") }, modifier = Modifier.weight(1f), enabled = false, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = LocalContentColor.current.copy(LocalContentColor.current.alpha)))
-                OutlinedTextField(value = project.finalReportDate?.format(dateFormatter) ?: "", onValueChange = {}, readOnly = true, label = { Text("FECHA INFORME FINAL") }, modifier = Modifier.weight(1f), enabled = false, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = LocalContentColor.current.copy(LocalContentColor.current.alpha)))
+                // CORRECCIÓN SOLICITADA:
+                // Si deadlineDays es 0 (lo que retorna tu lógica cuando no hay fecha), mostramos el texto "Días de plazo".
+                // De lo contrario, mostramos el número calculado.
+                val daysText = if (project.deadlineDays == 0L && project.endDate == null) "Días de plazo" else project.deadlineDays.toString()
+
+                OutlinedTextField(
+                    value = daysText,
+                    onValueChange = {},
+                    readOnly = true,
+                    // Etiqueta corta para evitar desbordamiento
+                    label = { Text("DÍAS INF.", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    modifier = Modifier.weight(1f),
+                    enabled = false,
+                    colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledContainerColor = Color.Transparent, disabledBorderColor = MaterialTheme.colorScheme.outline)
+                )
+                OutlinedTextField(
+                    value = project.finalReportDate?.format(dateFormatter) ?: "",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("FECHA INF. FINAL", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    modifier = Modifier.weight(1f),
+                    enabled = false,
+                    colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledContainerColor = Color.Transparent, disabledBorderColor = MaterialTheme.colorScheme.outline)
+                )
             }
         }
     }

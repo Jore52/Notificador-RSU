@@ -67,7 +67,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
     debugImplementation(libs.debug.compose.ui.tooling)
-
+    implementation("com.cloudinary:cloudinary-android:2.5.0") // Verifica la última versión
     // Navigation
     implementation(libs.androidx.navigation.compose)
 

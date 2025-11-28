@@ -3,6 +3,7 @@ package com.example.notificadorrsuv5.data.repository
 import com.example.notificadorrsuv5.data.local.ConditionDao
 import com.example.notificadorrsuv5.data.local.ProjectDao
 import com.example.notificadorrsuv5.data.local.ProjectEntity
+import com.example.notificadorrsuv5.domain.model.DeadlineCalculationMethod
 import com.example.notificadorrsuv5.domain.model.Project
 import com.example.notificadorrsuv5.domain.model.Response
 import com.example.notificadorrsuv5.domain.repository.AuthRepository
@@ -22,14 +23,23 @@ import javax.inject.Inject
 class ProjectRepositoryImpl @Inject constructor(
     private val db: FirebaseDatabase,
     private val authRepository: AuthRepository,
-    private val projectDao: ProjectDao, // Ahora sí se reconoce esta clase
-    private val conditionDao: ConditionDao // Ahora sí se reconoce esta clase
+    private val projectDao: ProjectDao,
+    private val conditionDao: ConditionDao
 ) : ProjectRepository {
 
+    // Obtiene el ID del usuario actual de forma segura
     private val userId: String
-        get() = authRepository.currentUser.value?.uid!!
+        get() = authRepository.currentUser.value?.uid ?: ""
 
     override fun getProjects(): Flow<Response<List<Project>>> = callbackFlow {
+        // CORRECCIÓN: Si no hay usuario, no cargamos nada
+        if (userId.isBlank()) {
+            trySend(Response.Failure(Exception("Usuario no autenticado")))
+            close()
+            return@callbackFlow
+        }
+
+        // CORRECCIÓN: La ruta incluye el userId para aislar datos
         val ref = db.reference.child("projects").child(userId)
 
         val listener = object : ValueEventListener {
@@ -48,6 +58,8 @@ class ProjectRepositoryImpl @Inject constructor(
 
     override suspend fun getProjectById(projectId: String): Response<Project> {
         return try {
+            if (userId.isBlank()) return Response.Failure(Exception("Usuario no autenticado"))
+
             val snapshot = db.reference.child("projects").child(userId).child(projectId).get().await()
             val project = snapshot.getValue(Project::class.java)
             if (project != null) {
@@ -62,22 +74,31 @@ class ProjectRepositoryImpl @Inject constructor(
 
     override suspend fun saveProject(project: Project): Response<Boolean> {
         return try {
-            val uid = userId // El getter ya maneja el nulo con !! o puedes usar safe call aquí si prefieres
+            if (userId.isBlank()) return Response.Failure(Exception("Usuario no logueado"))
 
-            // 1. Generar ID si no existe
             val newId = if (project.id.isBlank()) UUID.randomUUID().toString() else project.id
             val projectWithId = project.copy(id = newId)
 
-            // 2. Guardar en Firebase
-            db.reference.child("projects").child(uid).child(newId).setValue(projectWithId).await()
+            // CORRECCIÓN: Guardar bajo el nodo del usuario
+            db.reference.child("projects").child(userId).child(newId).setValue(projectWithId).await()
 
-            // 3. Guardar en Room (Local)
+            // Guardar en Room (Local) - Opcional si solo quieres nube, pero útil para el Worker
             val entity = projectWithId.toEntity()
             projectDao.insertProject(entity)
 
-            // TODO: Descomentar y adaptar cuando ConditionDao esté listo y sync con String IDs
-            // conditionDao.saveProjectConditions(newId, projectWithId.conditions.map { it.toEntity(newId) })
+            Response.Success(true)
+        } catch (e: Exception) {
+            Response.Failure(e)
+        }
+    }
 
+    override suspend fun deleteProject(projectId: String): Response<Boolean> {
+        return try {
+            if (userId.isBlank()) return Response.Failure(Exception("Usuario no autenticado"))
+
+            db.reference.child("projects").child(userId).child(projectId).removeValue().await()
+            // También borrar localmente si es necesario
+            // projectDao.deleteProjectById(projectId)
             Response.Success(true)
         } catch (e: Exception) {
             Response.Failure(e)
@@ -99,15 +120,5 @@ class ProjectRepositoryImpl @Inject constructor(
             endDate = this.endDate ?: LocalDate.now(),
             attachedFileUris = this.attachedFileUris
         )
-    }
-
-    override suspend fun deleteProject(projectId: String): Response<Boolean> {
-        return try {
-            db.reference.child("projects").child(userId).child(projectId).removeValue().await()
-            projectDao.deleteProject(ProjectEntity(id = projectId, name="", coordinatorName="", coordinatorEmail="", school="", startDate= LocalDate.now(), endDate= LocalDate.now())) // Borrado local básico
-            Response.Success(true)
-        } catch (e: Exception) {
-            Response.Failure(e)
-        }
     }
 }
