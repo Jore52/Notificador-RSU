@@ -1,4 +1,4 @@
-package com.example.notificadorrsu5.domain.model
+package com.example.notificadorrsuv5.domain.model
 
 sealed class Response<out T> {
     // Estado de carga

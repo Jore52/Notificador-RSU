@@ -7,7 +7,7 @@ import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.notificadorrsu5.domain.model.Response
+import com.example.notificadorrsuv5.domain.model.Response
 import com.example.notificadorrsuv5.R
 import com.example.notificadorrsuv5.domain.model.*
 import com.example.notificadorrsuv5.domain.repository.AuthRepository

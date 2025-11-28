@@ -6,7 +6,8 @@ import java.time.LocalDate
 
 @Entity(tableName = "projects")
 data class ProjectEntity(
-    @PrimaryKey(autoGenerate = true)
+    // CAMBIO: autoGenerate = false porque usaremos el ID de String de Firebase/UUID
+    @PrimaryKey(autoGenerate = false)
     val id: String,
     val name: String,
     val coordinatorName: String,

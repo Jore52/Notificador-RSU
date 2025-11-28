@@ -10,12 +10,13 @@ import com.example.notificadorrsuv5.domain.model.FrequencyType
 @Entity(
     tableName = "conditions",
     foreignKeys = [ForeignKey(entity = ProjectEntity::class, parentColumns = ["id"], childColumns = ["projectId"], onDelete = ForeignKey.CASCADE)],
+    // SOLUCIÓN AL WARNING: Agregamos el índice
     indices = [Index(value = ["projectId"])]
 )
 data class ConditionEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val projectId: Long,
+    val projectId: String, // CAMBIO: De Long a String
     val name: String,
     val subject: String,
     val body: String,

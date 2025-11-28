@@ -8,7 +8,7 @@ import java.time.LocalDateTime
 data class SentEmailEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val projectId: Long,
+    val projectId: String, // CAMBIO: De Long a String
     val conditionId: Long,
     val recipientEmail: String,
     val subject: String,

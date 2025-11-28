@@ -23,7 +23,8 @@ data class ProjectsListUiState(
     val error: String? = null,
     val isLoading: Boolean = true,
     val sortType: SortType = SortType.DEFAULT,
-    val sortOrder: SortOrder = SortOrder.ASC
+    val sortOrder: SortOrder = SortOrder.ASC,
+    val searchQuery: String = ""
 )
 
 @HiltViewModel
@@ -36,34 +37,61 @@ class ProjectsListViewModel @Inject constructor(
 
     private val _sortState = MutableStateFlow(Pair(SortType.DEFAULT, SortOrder.ASC))
     private val _localProjects = MutableStateFlow<List<Project>>(emptyList())
+    private val _searchQuery = MutableStateFlow("")
 
     val currentUser: StateFlow<FirebaseUser?> = authRepository.currentUser
 
-    val uiState: StateFlow<ProjectsListUiState> = combine(_sortState, projectRepository.getProjects(), _localProjects) { sort, projectsResponse, localList ->
+    val uiState: StateFlow<ProjectsListUiState> = combine(
+        _sortState,
+        projectRepository.getProjects(),
+        _localProjects,
+        _searchQuery
+    ) { sort, projectsResponse, localList, query ->
+
+        // SOLUCIÓN AL ERROR 'second': Desestructuramos el Par aquí directamente
+        val (currentSortType, currentSortOrder) = sort
+
         when (projectsResponse) {
             is Response.Loading -> ProjectsListUiState(isLoading = true)
-            // CORRECCIÓN: Usar <*> y cast as List<Project>
+            // SOLUCIÓN AL ERROR 'Response' y 'data': Se requiere el genérico <*>
             is Response.Success<*> -> {
                 @Suppress("UNCHECKED_CAST")
                 val projects = projectsResponse.data as List<Project>
 
-                val sourceList = if (localList.isEmpty() || localList.size != projects.size) projects else localList
+                // 1. Determinar lista base
+                var sourceList = if (localList.isEmpty() || localList.size != projects.size) projects else localList
 
-                val sortedProjects = when (sort.first) {
+                // 2. Filtrar
+                if (query.isNotBlank()) {
+                    sourceList = sourceList.filter {
+                        it.name.contains(query, ignoreCase = true) ||
+                                it.coordinatorName.contains(query, ignoreCase = true)
+                    }
+                }
+
+                // 3. Ordenar (Usando las variables desestructuradas)
+                val sortedProjects = when (currentSortType) {
                     SortType.DEFAULT -> {
-                        if (sort.second == SortOrder.ASC) sourceList.sortedBy { it.name }
+                        if (currentSortOrder == SortOrder.ASC) sourceList.sortedBy { it.name }
                         else sourceList.sortedByDescending { it.name }
                     }
                     SortType.DEADLINE_DAYS -> {
-                        if (sort.second == SortOrder.ASC) sourceList.sortedBy { it.deadlineDays }
+                        if (currentSortOrder == SortOrder.ASC) sourceList.sortedBy { it.deadlineDays }
                         else sourceList.sortedByDescending { it.deadlineDays }
                     }
                 }
-                if (localList.isEmpty()) {
+
+                if (localList.isEmpty() && query.isBlank()) {
                     _localProjects.value = sortedProjects
                 }
 
-                ProjectsListUiState(projects = sortedProjects, isLoading = false)
+                ProjectsListUiState(
+                    projects = sortedProjects,
+                    isLoading = false,
+                    searchQuery = query,
+                    sortType = currentSortType,
+                    sortOrder = currentSortOrder
+                )
             }
             is Response.Failure -> ProjectsListUiState(error = projectsResponse.e?.message)
         }
@@ -79,6 +107,10 @@ class ProjectsListViewModel @Inject constructor(
             authRepository.logout()
             onLogoutComplete()
         }
+    }
+
+    fun onSearchQueryChange(newQuery: String) {
+        _searchQuery.value = newQuery
     }
 
     fun onSortChange(newSortType: SortType) {
@@ -106,6 +138,8 @@ class ProjectsListViewModel @Inject constructor(
     }
 
     fun onMoveProject(fromIndex: Int, toIndex: Int) {
+        if (_searchQuery.value.isNotBlank()) return
+
         val currentList = _localProjects.value.toMutableList()
         if (fromIndex in currentList.indices && toIndex in currentList.indices) {
             Collections.swap(currentList, fromIndex, toIndex)
