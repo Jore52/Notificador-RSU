@@ -8,8 +8,9 @@ interface SentEmailDao {
     @Query("SELECT * FROM sent_emails ORDER BY sentAt DESC")
     fun getAllSentEmails(): Flow<List<SentEmailEntity>>
 
+    // CAMBIO: conditionId ahora es String
     @Query("SELECT EXISTS(SELECT 1 FROM sent_emails WHERE conditionId = :conditionId AND wasSuccessful = 1 LIMIT 1)")
-    suspend fun hasEmailBeenSentForCondition(conditionId: Long): Boolean
+    suspend fun hasEmailBeenSentForCondition(conditionId: String): Boolean
 
     @Insert
     suspend fun insertSentEmail(sentEmail: SentEmailEntity)

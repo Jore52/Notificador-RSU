@@ -22,6 +22,7 @@ fun ProjectEntity.toDomainModel(): Project {
         },
         startDate = this.startDate,
         endDate = this.endDate,
+        fixedDeadlineDaysForCalculation = this.fixedDeadlineDaysForCalculation, // <--- AÑADIR ESTO
         attachedFileUris = this.attachedFileUris
     )
 }

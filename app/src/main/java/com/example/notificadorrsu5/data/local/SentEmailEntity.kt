@@ -9,7 +9,7 @@ data class SentEmailEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val projectId: String, // CAMBIO: De Long a String
-    val conditionId: Long,
+    val conditionId: String,
     val recipientEmail: String,
     val subject: String,
     val body: String,

@@ -8,7 +8,6 @@ import androidx.work.WorkerParameters
 import com.example.notificadorrsuv5.data.local.ConditionDao
 import com.example.notificadorrsuv5.data.local.ConditionEntity
 import com.example.notificadorrsuv5.data.local.ProjectDao
-import com.example.notificadorrsuv5.data.local.ProjectEntity
 import com.example.notificadorrsuv5.data.local.SentEmailDao
 import com.example.notificadorrsuv5.data.local.SentEmailEntity
 import com.example.notificadorrsuv5.domain.model.ConditionOperator
@@ -56,22 +55,27 @@ class ConditionCheckWorker @AssistedInject constructor(
                     if (isConditionMet(condition, currentDeadlineDays)) {
                         Log.d(WORK_NAME, "Condición #${condition.id} CUMPLIDA para '${project.name}'.")
 
+                        // CORRECCIÓN: Convertimos el ID (Long) a String explícitamente
+                        val conditionIdString = condition.id.toString()
+
                         val alreadySent = if (condition.frequency == FrequencyType.ONCE) {
-                            sentEmailDao.hasEmailBeenSentForCondition(condition.id)
+                            sentEmailDao.hasEmailBeenSentForCondition(conditionIdString)
                         } else false
 
                         if (!alreadySent) {
                             Log.d(WORK_NAME, "Enviando notificación personalizada para la condición '${condition.name}'.")
                             val subject = condition.subject
-                            val body = condition.body.replacePlaceholders(project) // Reemplaza placeholders
+                            val body = condition.body.replacePlaceholders(project)
 
                             val emailResult = emailSender.sendEmail(project.coordinatorEmail, subject, body)
 
                             val sentEmail = SentEmailEntity(
                                 projectId = project.id,
-                                conditionId = condition.id,
+                                conditionId = conditionIdString, // Usamos la versión String aquí también
                                 recipientEmail = project.coordinatorEmail,
-                                subject = subject, body = body, sentAt = LocalDateTime.now(),
+                                subject = subject,
+                                body = body,
+                                sentAt = LocalDateTime.now(),
                                 wasSuccessful = emailResult.isSuccess,
                                 errorMessage = emailResult.exceptionOrNull()?.message
                             )
@@ -95,7 +99,7 @@ class ConditionCheckWorker @AssistedInject constructor(
         return this.replace("{nombreCoordinador}", project.coordinatorName)
             .replace("{nombreProyecto}", project.name)
             .replace("{diasPlazo}", project.deadlineDays.toString())
-            .replace("{fechaInformeFinal}", project.finalReportDate.toString())
+            .replace("{fechaInformeFinal}", project.finalReportDate?.toString() ?: "N/A")
     }
 
     private fun isConditionMet(condition: ConditionEntity, currentDays: Long): Boolean {
@@ -107,18 +111,4 @@ class ConditionCheckWorker @AssistedInject constructor(
             ConditionOperator.GREATER_THAN_OR_EQUAL_TO -> currentDays >= condition.deadlineDays
         }
     }
-
-    private fun createEmailBody(project: Project, condition: ConditionEntity, currentDays: Long) = """
-        Hola ${project.coordinatorName},
-
-        Este es un recordatorio automático sobre tu proyecto de RSU "${project.name}".
-
-        La condición de notificación "Días de plazo ${condition.operator.symbol} ${condition.deadlineDays}" se ha cumplido hoy.
-        Actualmente, los días de plazo restantes son: $currentDays.
-
-        Fecha de entrega del informe final: ${project.finalReportDate}
-
-        Saludos,
-        Dirección de Responsabilidad Social Universitaria UNTELS
-    """.trimIndent()
 }

@@ -19,5 +19,6 @@ data class ProjectEntity(
     val deadlineCalculationMethod: String = "BUSINESS_DAYS",
     val startDate: LocalDate,
     val endDate: LocalDate,
+    val fixedDeadlineDaysForCalculation: Int = 10,
     val attachedFileUris: List<String> = emptyList()
 )

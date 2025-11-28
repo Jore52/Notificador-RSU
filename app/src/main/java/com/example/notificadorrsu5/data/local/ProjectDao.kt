@@ -1,18 +1,20 @@
 package com.example.notificadorrsuv5.data.local
 
 import androidx.room.*
+import com.example.notificadorrsu5.data.local.ProjectWithDetails
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ProjectDao {
+    // CAMBIO: Usamos @Transaction y devolvemos ProjectWithDetails
+    @Transaction
     @Query("SELECT * FROM projects ORDER BY name ASC")
-    fun getAllProjects(): Flow<List<ProjectEntity>>
+    fun getProjectsWithDetails(): Flow<List<ProjectWithDetails>>
 
-    // CAMBIO: El parámetro es String
+    @Transaction
     @Query("SELECT * FROM projects WHERE id = :projectId")
-    suspend fun getProjectById(projectId: String): ProjectEntity?
+    suspend fun getProjectWithDetailsById(projectId: String): ProjectWithDetails?
 
-    // CAMBIO: Ya no devuelve Long, porque no es autogenerado
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertProject(project: ProjectEntity)
 
@@ -21,4 +23,8 @@ interface ProjectDao {
 
     @Delete
     suspend fun deleteProject(project: ProjectEntity)
+
+    // Mantén este método antiguo solo si lo usas en el Worker, si no, puedes borrarlo
+    @Query("SELECT * FROM projects ORDER BY name ASC")
+    fun getAllProjects(): Flow<List<ProjectEntity>>
 }

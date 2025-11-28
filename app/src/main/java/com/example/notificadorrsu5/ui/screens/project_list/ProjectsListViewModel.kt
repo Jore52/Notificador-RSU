@@ -35,26 +35,27 @@ class ProjectsListViewModel @Inject constructor(
     private val firebaseAuth: FirebaseAuth
 ) : ViewModel() {
 
-    private val _sortState = MutableStateFlow(Pair(SortType.DEFAULT, SortOrder.ASC))
+    // Se especifica el tipo explícitamente para ayudar a la inferencia
+    private val _sortState = MutableStateFlow<Pair<SortType, SortOrder>>(Pair(SortType.DEFAULT, SortOrder.ASC))
     private val _localProjects = MutableStateFlow<List<Project>>(emptyList())
     private val _searchQuery = MutableStateFlow("")
 
     val currentUser: StateFlow<FirebaseUser?> = authRepository.currentUser
 
+    // CORRECCIÓN PRINCIPAL: Tipos explícitos en los parámetros de la lambda
     val uiState: StateFlow<ProjectsListUiState> = combine(
         _sortState,
         projectRepository.getProjects(),
         _localProjects,
         _searchQuery
-    ) { sort, projectsResponse, localList, query ->
+    ) { sort: Pair<SortType, SortOrder>, projectsResponse: Response<List<Project>>, localList: List<Project>, query: String ->
 
-        // SOLUCIÓN AL ERROR 'second': Desestructuramos el Par aquí directamente
         val (currentSortType, currentSortOrder) = sort
 
         when (projectsResponse) {
             is Response.Loading -> ProjectsListUiState(isLoading = true)
-            // SOLUCIÓN AL ERROR 'Response' y 'data': Se requiere el genérico <*>
             is Response.Success<*> -> {
+                // Cast seguro de la respuesta genérica
                 @Suppress("UNCHECKED_CAST")
                 val projects = projectsResponse.data as List<Project>
 
@@ -69,7 +70,7 @@ class ProjectsListViewModel @Inject constructor(
                     }
                 }
 
-                // 3. Ordenar (Usando las variables desestructuradas)
+                // 3. Ordenar
                 val sortedProjects = when (currentSortType) {
                     SortType.DEFAULT -> {
                         if (currentSortOrder == SortOrder.ASC) sourceList.sortedBy { it.name }
@@ -81,6 +82,7 @@ class ProjectsListViewModel @Inject constructor(
                     }
                 }
 
+                // Actualizar lista local si es la carga inicial
                 if (localList.isEmpty() && query.isBlank()) {
                     _localProjects.value = sortedProjects
                 }

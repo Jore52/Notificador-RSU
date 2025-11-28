@@ -9,17 +9,20 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface MemberDao {
+    // CAMBIO: El parámetro ahora es String
     @Query("SELECT * FROM members WHERE projectId = :projectId ORDER BY displayOrder ASC")
-    fun getMembersForProject(projectId: Long): Flow<List<MemberEntity>>
+    fun getMembersForProject(projectId: String): Flow<List<MemberEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(members: List<MemberEntity>)
 
+    // CAMBIO: El parámetro ahora es String
     @Query("DELETE FROM members WHERE projectId = :projectId")
-    suspend fun deleteAllByProjectId(projectId: Long)
+    suspend fun deleteAllByProjectId(projectId: String)
 
     @Transaction
-    suspend fun saveProjectMembers(projectId: Long, members: List<MemberEntity>) {
+    // CAMBIO: El parámetro ahora es String
+    suspend fun saveProjectMembers(projectId: String, members: List<MemberEntity>) {
         deleteAllByProjectId(projectId)
         insertAll(members)
     }

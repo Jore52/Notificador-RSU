@@ -1,8 +1,8 @@
 package com.example.notificadorrsuv5.di
 
+import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.FirebaseDatabase
-// import com.google.firebase.storage.FirebaseStorage // <-- Bórralo o coméntalo
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -22,15 +22,15 @@ object FirebaseModule {
     @Provides
     @Singleton
     fun provideFirebaseDatabase(): FirebaseDatabase {
-        return FirebaseDatabase.getInstance()
+        val database = FirebaseDatabase.getInstance()
+        try {
+            // ESTA LÍNEA ES LA CLAVE PARA QUE NO SE CONGELE
+            database.setPersistenceEnabled(true)
+            Log.d("FirebaseModule", "Persistencia offline activada correctamente")
+        } catch (e: Exception) {
+            // Si ya estaba activa, ignoramos el error
+            Log.w("FirebaseModule", "La persistencia ya estaba activa: ${e.message}")
+        }
+        return database
     }
-
-    // ELIMINA O COMENTA ESTA FUNCIÓN DE STORAGE:
-    /*
-    @Provides
-    @Singleton
-    fun provideFirebaseStorage(): FirebaseStorage {
-        return FirebaseStorage.getInstance()
-    }
-    */
 }

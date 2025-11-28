@@ -1,23 +1,26 @@
 package com.example.notificadorrsuv5.data.repository
 
+import android.util.Log
+import com.example.notificadorrsu5.data.local.ProjectWithDetails
 import com.example.notificadorrsuv5.data.dto.ProjectFirebaseDto
 import com.example.notificadorrsuv5.data.dto.toDomain
 import com.example.notificadorrsuv5.data.dto.toFirebaseDto
-import com.example.notificadorrsuv5.data.local.ConditionDao
-import com.example.notificadorrsuv5.data.local.ProjectDao
-import com.example.notificadorrsuv5.data.local.ProjectEntity
-import com.example.notificadorrsuv5.domain.model.Project
-import com.example.notificadorrsuv5.domain.model.Response
+import com.example.notificadorrsuv5.data.local.*
+import com.example.notificadorrsuv5.domain.model.*
 import com.example.notificadorrsuv5.domain.repository.AuthRepository
 import com.example.notificadorrsuv5.domain.repository.ProjectRepository
+import com.example.notificadorrsuv5.utils.toDomainModel
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
 import java.time.LocalDate
 import java.util.UUID
 import javax.inject.Inject
@@ -26,99 +29,209 @@ class ProjectRepositoryImpl @Inject constructor(
     private val db: FirebaseDatabase,
     private val authRepository: AuthRepository,
     private val projectDao: ProjectDao,
-    private val conditionDao: ConditionDao
+    private val conditionDao: ConditionDao,
+    private val memberDao: MemberDao
 ) : ProjectRepository {
 
-    // Obtenemos el ID del usuario actual. Si es nulo, devolvemos vacío.
     private val userId: String
         get() = authRepository.currentUser.value?.uid ?: ""
 
-    override fun getProjects(): Flow<Response<List<Project>>> = callbackFlow {
-        // Validamos autenticación para no cargar datos "fantasma"
+    // --- 1. LECTURA DE PROYECTOS (Fuente Única de Verdad) ---
+    override fun getProjects(): Flow<Response<List<Project>>> = channelFlow {
         if (userId.isBlank()) {
-            trySend(Response.Failure(Exception("Usuario no autenticado")))
+            send(Response.Failure(Exception("Usuario no autenticado")))
             close()
-            return@callbackFlow
+            return@channelFlow
         }
 
-        // Referencia a la carpeta privada del usuario
-        val ref = db.reference.child("projects").child(userId)
+        // A) Escuchar BD Local (Room) -> Actualiza la UI instantáneamente
+        launch {
+            projectDao.getProjectsWithDetails().collect { detailsList ->
+                try {
+                    val projects = detailsList.map { it.toDomain() }
+                    send(Response.Success(projects))
+                } catch (e: Exception) {
+                    send(Response.Failure(e))
+                }
+            }
+        }
 
+        // B) Escuchar Firebase -> Actualiza BD Local en segundo plano
+        val ref = db.reference.child("projects").child(userId)
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                // LEEMOS usando el DTO para evitar errores de fechas
-                val projects = snapshot.children.mapNotNull {
-                    it.getValue(ProjectFirebaseDto::class.java)?.toDomain()
+                launch {
+                    try {
+                        val projectsFromCloud = snapshot.children.mapNotNull {
+                            it.getValue(ProjectFirebaseDto::class.java)?.toDomain()
+                        }
+                        // Al guardar en local, Room dispara el bloque A) automáticamente
+                        projectsFromCloud.forEach { project ->
+                            saveProjectLocally(project)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("ProjectRepo", "Error sincronizando desde Firebase", e)
+                    }
                 }
-                trySend(Response.Success(projects))
             }
 
             override fun onCancelled(error: DatabaseError) {
-                trySend(Response.Failure(error.toException()))
+                Log.e("ProjectRepo", "Firebase cancelado: ${error.message}")
             }
         }
         ref.addValueEventListener(listener)
+
         awaitClose { ref.removeEventListener(listener) }
     }
 
+    // --- 2. OBTENER PROYECTO POR ID ---
     override suspend fun getProjectById(projectId: String): Response<Project> {
         return try {
-            if (userId.isBlank()) return Response.Failure(Exception("Usuario no autenticado"))
-
-            val snapshot = db.reference.child("projects").child(userId).child(projectId).get().await()
-            // LEEMOS usando el DTO
-            val projectDto = snapshot.getValue(ProjectFirebaseDto::class.java)
-
-            if (projectDto != null) {
-                Response.Success(projectDto.toDomain())
+            val localDetails = projectDao.getProjectWithDetailsById(projectId)
+            if (localDetails != null) {
+                Response.Success(localDetails.toDomain())
             } else {
-                Response.Failure(Exception("Project not found"))
+                if (userId.isBlank()) return Response.Failure(Exception("Usuario no autenticado"))
+                val snapshot = db.reference.child("projects").child(userId).child(projectId).get().await()
+                val projectDto = snapshot.getValue(ProjectFirebaseDto::class.java)
+                if (projectDto != null) {
+                    Response.Success(projectDto.toDomain())
+                } else {
+                    Response.Failure(Exception("Project not found"))
+                }
             }
         } catch (e: Exception) {
             Response.Failure(e)
         }
     }
 
+    // --- 3. GUARDAR PROYECTO ---
     override suspend fun saveProject(project: Project): Response<Boolean> {
         return try {
             if (userId.isBlank()) return Response.Failure(Exception("Usuario no logueado"))
+            Log.d("ProjectRepo", "Iniciando guardado del proyecto: ${project.name}")
 
             val newId = if (project.id.isBlank()) UUID.randomUUID().toString() else project.id
             val projectWithId = project.copy(id = newId)
 
-            // --- CORRECCIÓN CRÍTICA ---
-            // Convertimos el proyecto a DTO antes de enviarlo a Firebase.
-            // Esto transforma las fechas (LocalDate) a String, evitando el congelamiento.
-            val dtoToSave = projectWithId.toFirebaseDto()
+            // Intento de guardado en Nube (con Timeout)
+            Log.d("ProjectRepo", "Intentando escribir en Firebase...")
+            try {
+                withTimeout(4000L) {
+                    val dtoToSave = projectWithId.toFirebaseDto()
+                    db.reference.child("projects").child(userId).child(newId).setValue(dtoToSave).await()
+                }
+                Log.d("ProjectRepo", "Escritura en Firebase completada.")
+            } catch (e: TimeoutCancellationException) {
+                Log.w("ProjectRepo", "Firebase tardó mucho. Continuando con guardado local...")
+            } catch (e: Exception) {
+                Log.e("ProjectRepo", "Error al escribir en Firebase", e)
+            }
 
-            // Guardamos en la ruta del usuario específico
-            db.reference.child("projects").child(userId).child(newId).setValue(dtoToSave).await()
+            // Guardado Local (Crítico para actualización inmediata)
+            Log.d("ProjectRepo", "Guardando en base de datos local...")
+            saveProjectLocally(projectWithId)
 
-            // Guardado local en Room (Opcional, para caché o Worker)
-            val entity = projectWithId.toEntity()
-            projectDao.insertProject(entity)
-
+            Log.d("ProjectRepo", "Guardado finalizado.")
             Response.Success(true)
+
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("ProjectRepo", "Error al guardar proyecto", e)
             Response.Failure(e)
         }
     }
 
+    // --- MÉTODO PRIVADO DE GUARDADO LOCAL ---
+    private suspend fun saveProjectLocally(project: Project) {
+        // 1. Guardar Entidad Principal
+        projectDao.insertProject(project.toEntity())
+
+        // 2. Guardar Condiciones
+        val conditionEntities = project.conditions.map { condition ->
+            ConditionEntity(
+                id = if (condition.id.toLongOrNull() != null) condition.id.toLong() else 0L,
+                projectId = project.id,
+                name = condition.name,
+                subject = condition.subject,
+                body = condition.body,
+                deadlineDays = condition.deadlineDays,
+                operator = condition.operator,
+                frequency = condition.frequency,
+                displayOrder = 0,
+                attachmentUris = condition.attachmentUris
+            )
+        }
+        conditionDao.saveProjectConditions(project.id, conditionEntities)
+
+        // 3. Guardar Miembros
+        val memberEntities = project.members.map { member ->
+            MemberEntity(
+                id = if (member.id.isBlank()) UUID.randomUUID().toString() else member.id,
+                projectId = project.id,
+                fullName = member.fullName,
+                role = member.role,
+                dni = member.dni,
+                phone = member.phone,
+                email = member.email,
+                displayOrder = 0
+            )
+        }
+        memberDao.saveProjectMembers(project.id, memberEntities)
+    }
+
+    // --- 4. ELIMINAR PROYECTO (CORREGIDO) ---
     override suspend fun deleteProject(projectId: String): Response<Boolean> {
         return try {
-            if (userId.isBlank()) return Response.Failure(Exception("Usuario no autenticado"))
+            // CORRECCIÓN: Usamos getProjectWithDetailsById porque getProjectById no existe en DAO
+            val details = projectDao.getProjectWithDetailsById(projectId)
 
-            db.reference.child("projects").child(userId).child(projectId).removeValue().await()
-            // projectDao.deleteProjectById(projectId) // Si tienes el método en el DAO
+            // Si existe en local, borramos la entidad principal (Room borrará lo demás por Cascada)
+            if (details != null) {
+                projectDao.deleteProject(details.project)
+            }
 
+            // Borrar de la nube
+            if (userId.isNotBlank()) {
+                db.reference.child("projects").child(userId).child(projectId).removeValue().await()
+            }
             Response.Success(true)
         } catch (e: Exception) {
             Response.Failure(e)
         }
     }
 
-    // Mapper simple para Room (Local)
+    // --- MAPPERS ---
+    private fun ProjectWithDetails.toDomain(): Project {
+        return this.project.toDomainModel().copy(
+            conditions = this.conditions.map { it.toDomain() },
+            members = this.members.map { it.toDomain() }
+        )
+    }
+
+    private fun ConditionEntity.toDomain(): ConditionModel {
+        return ConditionModel(
+            id = this.id.toString(),
+            name = this.name,
+            subject = this.subject,
+            body = this.body,
+            deadlineDays = this.deadlineDays,
+            operator = this.operator,
+            frequency = this.frequency,
+            attachmentUris = this.attachmentUris
+        )
+    }
+
+    private fun MemberEntity.toDomain(): MemberModel {
+        return MemberModel(
+            id = this.id,
+            fullName = this.fullName,
+            role = this.role,
+            dni = this.dni,
+            phone = this.phone,
+            email = this.email
+        )
+    }
+
     private fun Project.toEntity(): ProjectEntity {
         return ProjectEntity(
             id = this.id,

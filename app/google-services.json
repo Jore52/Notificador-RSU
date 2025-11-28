@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "387432851598",
+    "firebase_url": "https://notificador-rsu-default-rtdb.firebaseio.com",
     "project_id": "notificador-rsu",
     "storage_bucket": "notificador-rsu.firebasestorage.app"
   },

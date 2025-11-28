@@ -13,13 +13,15 @@ import androidx.room.PrimaryKey
         childColumns = ["projectId"],
         onDelete = ForeignKey.CASCADE
     )],
-    // SOLUCIÓN AL WARNING: Agregamos el índice para la clave foránea
     indices = [Index(value = ["projectId"])]
 )
 data class MemberEntity(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
-    val projectId: String, // CAMBIO: De Long a String para coincidir con ProjectEntity
+    // CAMBIO: 'String' en lugar de 'Long' para soportar UUIDs de Firebase/Dominio
+    // autoGenerate = false porque el ID vendrá del modelo o se generará manualmente
+    @PrimaryKey(autoGenerate = false)
+    val id: String,
+
+    val projectId: String, // Correcto: String para coincidir con ProjectEntity
     val fullName: String,
     val role: String,
     val dni: String,
