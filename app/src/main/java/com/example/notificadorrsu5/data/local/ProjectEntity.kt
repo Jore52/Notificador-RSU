@@ -7,7 +7,7 @@ import java.time.LocalDate
 @Entity(tableName = "projects")
 data class ProjectEntity(
     @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
+    val id: String,
     val name: String,
     val coordinatorName: String,
     val coordinatorEmail: String,

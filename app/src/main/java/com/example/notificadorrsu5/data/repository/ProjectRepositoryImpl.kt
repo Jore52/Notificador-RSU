@@ -16,7 +16,9 @@ import javax.inject.Inject
 
 class ProjectRepositoryImpl @Inject constructor(
     private val db: FirebaseDatabase,
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val projectDao: ProjectDao, // <-- INYECTAR DAO
+    private val conditionDao: ConditionDao // <-- INYECTAR DAO DE CONDICIONES
 ) : ProjectRepository {
 
     private val userId: String
@@ -55,13 +57,44 @@ class ProjectRepositoryImpl @Inject constructor(
 
     override suspend fun saveProject(project: Project): Response<Boolean> {
         return try {
-            val newId = project.id.takeIf { it.isNotBlank() } ?: db.reference.push().key!!
+            val uid = userId ?: return Response.Failure(Exception("Usuario no logueado"))
+
+            // 1. Generar ID si no existe
+            val newId = if (project.id.isBlank()) UUID.randomUUID().toString() else project.id
             val projectWithId = project.copy(id = newId)
-            db.reference.child("projects").child(userId).child(newId).setValue(projectWithId).await()
+
+            // 2. Guardar en Firebase
+            db.reference.child("projects").child(uid).child(newId).setValue(projectWithId).await()
+
+            // 3. Guardar en Room (Local) para que el Worker lo vea
+            // Necesitas mapear de Domain -> Entity. Aquí un ejemplo rápido:
+            val entity = projectWithId.toEntity()
+            projectDao.insertProject(entity)
+
+            // También guardar condiciones localmente si las hay
+            // conditionDao.saveProjectConditions(newId, projectWithId.conditions.map { it.toEntity(newId) })
+
             Response.Success(true)
         } catch (e: Exception) {
             Response.Failure(e)
         }
+    }
+
+    private fun Project.toEntity(): ProjectEntity {
+        return ProjectEntity(
+            id = this.id,
+            name = this.name,
+            coordinatorName = this.coordinatorName,
+            coordinatorEmail = this.coordinatorEmail,
+            school = this.school,
+            projectType = this.projectType,
+            executionPlace = this.executionPlace,
+            notificationsEnabled = this.notificationsEnabled,
+            deadlineCalculationMethod = this.deadlineCalculationMethod.name,
+            startDate = this.startDate ?: LocalDate.now(),
+            endDate = this.endDate ?: LocalDate.now(),
+            attachedFileUris = this.attachedFileUris
+        )
     }
 
     override suspend fun deleteProject(projectId: String): Response<Boolean> {

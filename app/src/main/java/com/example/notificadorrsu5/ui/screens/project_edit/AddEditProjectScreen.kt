@@ -2,7 +2,6 @@ package com.example.notificadorrsuv5.ui.screens.project_edit
 
 import android.app.DatePickerDialog
 import android.net.Uri
-import android.widget.DatePicker
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -10,7 +9,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -62,7 +60,7 @@ fun AddEditProjectScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (uiState.project.id.length > 1) "Editar Proyecto" else "Añadir Proyecto") },
+                title = { Text(if (uiState.project.id.isNotBlank()) "Editar Proyecto" else "Añadir Proyecto") },
                 navigationIcon = {
                     IconButton(onClick = { navController.navigateUp() }) {
                         Icon(Icons.Default.ArrowBack, "Volver")
@@ -103,9 +101,11 @@ fun AddEditProjectScreen(
             }
         }
 
-        if (uiState.isConditionDialogVisible && uiState.editableCondition != null) {
+        // CORRECCIÓN 1: Capturamos la variable localmente para evitar el error de "Smart cast"
+        val currentCondition = uiState.editableCondition
+        if (uiState.isConditionDialogVisible && currentCondition != null) {
             ConditionDialog(
-                condition = uiState.editableCondition,
+                condition = currentCondition, // Pasamos la variable local segura
                 isUploadingFile = uiState.isUploadingFile,
                 fileNameResolver = fileNameResolver,
                 onDismiss = viewModel::onDismissConditionDialog,
@@ -237,7 +237,9 @@ fun ApprovalDocumentCard(uiState: AddEditProjectUiState, viewModel: AddEditProje
                     Text("Adjuntar Documento")
                 }
             }
-            project.attachmentUris.forEach { url ->
+
+            // CORRECCIÓN 2 y 3: Se corrigió "attachmentUris" por "attachedFileUris"
+            project.attachedFileUris.forEach { url ->
                 val fileName = remember(url) { fileNameResolver.getFileName(Uri.parse(url)) }
                 FileItem(fileName = fileName, onRemove = { viewModel.onFileRemoved(url, isDialog = false) })
             }
@@ -333,6 +335,7 @@ fun ConditionDialog(
                         Text("Adjuntar Archivos")
                     }
                 }
+                // Aquí usamos attachmentUris porque es correcto para ConditionModel
                 condition.attachmentUris.forEach { url ->
                     FileItem(fileName = fileNameResolver.getFileName(Uri.parse(url)), onRemove = { onFileRemoved(url) })
                 }
@@ -375,17 +378,4 @@ fun FrequencyDropdown(selectedFrequency: FrequencyType, onFrequencyChange: (Freq
             }
         }
     }
-}
-
-fun FrequencyType.toReadableString(): String = when (this) {
-    FrequencyType.ONCE -> "Solo una vez"
-    FrequencyType.DAILY -> "Diariamente"
-}
-
-fun ConditionOperator.toReadableString(): String = when (this) {
-    ConditionOperator.EQUAL_TO -> "Igual a"
-    ConditionOperator.LESS_THAN -> "Menor que"
-    ConditionOperator.GREATER_THAN -> "Mayor que"
-    ConditionOperator.LESS_THAN_OR_EQUAL_TO -> "Menor o igual que"
-    ConditionOperator.GREATER_THAN_OR_EQUAL_TO -> "Mayor o igual que"
 }

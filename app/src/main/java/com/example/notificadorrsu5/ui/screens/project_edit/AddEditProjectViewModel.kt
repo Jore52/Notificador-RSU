@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.notificadorrsu5.domain.model.Response
 import com.example.notificadorrsuv5.R
 import com.example.notificadorrsuv5.domain.model.*
 import com.example.notificadorrsuv5.domain.repository.AuthRepository
@@ -22,7 +23,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import javax.inject.Inject
@@ -54,7 +54,7 @@ class AddEditProjectViewModel @Inject constructor(
     val uiState: StateFlow<AddEditProjectUiState> = _uiState.asStateFlow()
 
     init {
-        if (projectId != null && projectId != "-1") {
+        if (projectId != null && projectId != "-1" && projectId.isNotBlank()) {
             loadProjectData(projectId)
         } else {
             _uiState.update { it.copy(isLoading = false, project = Project(id = UUID.randomUUID().toString())) }
@@ -65,8 +65,10 @@ class AddEditProjectViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             when (val response = projectRepository.getProjectById(id)) {
-                is Response.Success -> _uiState.update {
-                    it.copy(project = response.data, isLoading = false)
+                // CORRECCIÓN 1: Usar <*> y cast as Project
+                is Response.Success<*> -> {
+                    val projectData = response.data as Project
+                    _uiState.update { it.copy(project = projectData, isLoading = false) }
                 }
                 is Response.Failure -> _uiState.update {
                     it.copy(error = response.e?.message, isLoading = false)
@@ -90,7 +92,8 @@ class AddEditProjectViewModel @Inject constructor(
             }
 
             when (projectRepository.saveProject(project)) {
-                is Response.Success -> {
+                // CORRECCIÓN 2: Usar <*> para la respuesta de guardado
+                is Response.Success<*> -> {
                     performImmediateConditionCheck(project)
                     _uiState.update { it.copy(isProjectSaved = true, isSaving = false) }
                 }
@@ -113,15 +116,14 @@ class AddEditProjectViewModel @Inject constructor(
         for (condition in project.conditions) {
             val isMet = when (condition.operator) {
                 ConditionOperator.EQUAL_TO -> currentDeadlineDays == condition.deadlineDays.toLong()
-                ConditionOperator.LESS_THAN -> currentDeadlineDays < condition.deadlineDays
-                ConditionOperator.GREATER_THAN -> currentDeadlineDays > condition.deadlineDays
-                ConditionOperator.LESS_THAN_OR_EQUAL_TO -> currentDeadlineDays <= condition.deadlineDays
-                ConditionOperator.GREATER_THAN_OR_EQUAL_TO -> currentDeadlineDays >= condition.deadlineDays
+                ConditionOperator.LESS_THAN -> currentDeadlineDays < condition.deadlineDays.toLong()
+                ConditionOperator.GREATER_THAN -> currentDeadlineDays > condition.deadlineDays.toLong()
+                ConditionOperator.LESS_THAN_OR_EQUAL_TO -> currentDeadlineDays <= condition.deadlineDays.toLong()
+                ConditionOperator.GREATER_THAN_OR_EQUAL_TO -> currentDeadlineDays >= condition.deadlineDays.toLong()
             }
 
             if (isMet) {
-                // TODO: Implementar un repositorio para verificar si el email ya fue enviado
-                val alreadySent = false
+                val alreadySent = false // TODO: Verificar historial
 
                 if (!alreadySent) {
                     val subject = condition.subject
@@ -209,7 +211,7 @@ class AddEditProjectViewModel @Inject constructor(
                     val condition = _uiState.value.editableCondition?.let { it.copy(attachmentUris = it.attachmentUris + downloadUrl) } ?: return@launch
                     onEditableConditionChange(condition)
                 } else {
-                    onProjectChange(_uiState.value.project.copy(attachmentUris = _uiState.value.project.attachmentUris + downloadUrl))
+                    onProjectChange(_uiState.value.project.copy(attachedFileUris = _uiState.value.project.attachedFileUris + downloadUrl))
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "No se pudo subir el archivo.") }
@@ -228,7 +230,7 @@ class AddEditProjectViewModel @Inject constructor(
                     val condition = _uiState.value.editableCondition?.let { it.copy(attachmentUris = it.attachmentUris - url) } ?: return@launch
                     onEditableConditionChange(condition)
                 } else {
-                    onProjectChange(_uiState.value.project.copy(attachmentUris = _uiState.value.project.attachmentUris - url))
+                    onProjectChange(_uiState.value.project.copy(attachedFileUris = _uiState.value.project.attachedFileUris - url))
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "No se pudo eliminar el archivo.") }

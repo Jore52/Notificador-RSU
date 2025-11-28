@@ -12,7 +12,7 @@ interface ProjectDao {
     suspend fun getProjectById(projectId: Long): ProjectEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertProject(project: ProjectEntity): Long
+    suspend fun insertProject(project: ProjectEntity)
 
     @Update
     suspend fun updateProject(project: ProjectEntity)

@@ -12,6 +12,7 @@ import com.google.firebase.auth.FirebaseUser
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.util.Collections
 import javax.inject.Inject
 
 enum class SortType { DEFAULT, DEADLINE_DAYS }
@@ -34,25 +35,34 @@ class ProjectsListViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val _sortState = MutableStateFlow(Pair(SortType.DEFAULT, SortOrder.ASC))
-    private val _projects = projectRepository.getProjects()
+    private val _localProjects = MutableStateFlow<List<Project>>(emptyList())
 
     val currentUser: StateFlow<FirebaseUser?> = authRepository.currentUser
 
-    val uiState: StateFlow<ProjectsListUiState> = combine(_sortState, _projects) { sort, projectsResponse ->
+    val uiState: StateFlow<ProjectsListUiState> = combine(_sortState, projectRepository.getProjects(), _localProjects) { sort, projectsResponse, localList ->
         when (projectsResponse) {
             is Response.Loading -> ProjectsListUiState(isLoading = true)
-            is Response.Success -> {
-                val projects = projectsResponse.data
+            // CORRECCIÓN: Usar <*> y cast as List<Project>
+            is Response.Success<*> -> {
+                @Suppress("UNCHECKED_CAST")
+                val projects = projectsResponse.data as List<Project>
+
+                val sourceList = if (localList.isEmpty() || localList.size != projects.size) projects else localList
+
                 val sortedProjects = when (sort.first) {
                     SortType.DEFAULT -> {
-                        if (sort.second == SortOrder.ASC) projects.sortedBy { it.name }
-                        else projects.sortedByDescending { it.name }
+                        if (sort.second == SortOrder.ASC) sourceList.sortedBy { it.name }
+                        else sourceList.sortedByDescending { it.name }
                     }
                     SortType.DEADLINE_DAYS -> {
-                        if (sort.second == SortOrder.ASC) projects.sortedBy { it.deadlineDays }
-                        else projects.sortedByDescending { it.deadlineDays }
+                        if (sort.second == SortOrder.ASC) sourceList.sortedBy { it.deadlineDays }
+                        else sourceList.sortedByDescending { it.deadlineDays }
                     }
                 }
+                if (localList.isEmpty()) {
+                    _localProjects.value = sortedProjects
+                }
+
                 ProjectsListUiState(projects = sortedProjects, isLoading = false)
             }
             is Response.Failure -> ProjectsListUiState(error = projectsResponse.e?.message)
@@ -92,6 +102,14 @@ class ProjectsListViewModel @Inject constructor(
     fun onDeleteProject(projectId: String) {
         viewModelScope.launch {
             projectRepository.deleteProject(projectId)
+        }
+    }
+
+    fun onMoveProject(fromIndex: Int, toIndex: Int) {
+        val currentList = _localProjects.value.toMutableList()
+        if (fromIndex in currentList.indices && toIndex in currentList.indices) {
+            Collections.swap(currentList, fromIndex, toIndex)
+            _localProjects.value = currentList
         }
     }
 }
