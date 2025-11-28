@@ -213,6 +213,8 @@ class AddEditProjectViewModel @Inject constructor(
     }
 
     // --- SUBIDA A DRIVE CON MANEJO DE ERROR DE AUTH ---
+// ... dentro de AddEditProjectViewModel
+
     fun onFileAttached(uri: Uri, isDialog: Boolean) {
         _uiState.update { it.copy(isUploadingFile = true) }
         val account = GoogleSignIn.getLastSignedInAccount(context)
@@ -225,13 +227,14 @@ class AddEditProjectViewModel @Inject constructor(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // ... (Configuración de credenciales igual que antes) ...
                 val credential = GoogleAccountCredential.usingOAuth2(context, Collections.singleton(DriveScopes.DRIVE_FILE))
                 credential.selectedAccount = account.account
-
                 val driveService = Drive.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
                     .setApplicationName("Notificador RSU V5").build()
 
-                val name = fileNameResolver.getFileName(uri)
+                // ... (Lectura del archivo igual que antes) ...
+                val name = fileNameResolver.getFileName(uri) // Obtenemos el nombre real (ej. "informe.pdf")
                 val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
                 val fileMetadata = File().apply { this.name = name }
                 val inputStream = context.contentResolver.openInputStream(uri) ?: throw Exception("No se pudo leer archivo")
@@ -241,21 +244,29 @@ class AddEditProjectViewModel @Inject constructor(
                     .setFields("id, webViewLink")
                     .execute()
 
-                val driveLink = file.webViewLink ?: "https://drive.google.com/file/d/${file.id}/view"
+                val rawLink = file.webViewLink ?: "https://drive.google.com/file/d/${file.id}/view"
+
+                // --- CAMBIO CLAVE AQUÍ ---
+                // Guardamos: "NombreDelArchivo|Enlace"
+                val combinedData = "$name|$rawLink"
+
+                Log.d("DriveUpload", "Guardando: $combinedData")
 
                 withContext(Dispatchers.Main) {
                     if (isDialog) {
-                        _uiState.value.editableCondition?.let { onEditableConditionChange(it.copy(attachmentUris = it.attachmentUris + driveLink)) }
+                        _uiState.value.editableCondition?.let {
+                            onEditableConditionChange(it.copy(attachmentUris = it.attachmentUris + combinedData))
+                        }
                     } else {
                         val p = _uiState.value.project
-                        onProjectChange(p.copy(attachedFileUris = p.attachedFileUris + driveLink))
+                        onProjectChange(p.copy(attachedFileUris = p.attachedFileUris + combinedData))
                     }
                     _uiState.update { it.copy(isUploadingFile = false) }
-                    showNotification("Archivo subido a Drive", NotificationType.SUCCESS)
+                    showNotification("Archivo subido: $name", NotificationType.SUCCESS)
                 }
 
             } catch (e: Exception) {
-                // CAPTURA DE ERROR: Si falta permiso, pedimos al usuario
+                // ... (Manejo de errores igual que antes) ...
                 if (e is UserRecoverableAuthIOException) {
                     _uiState.update { it.copy(isUploadingFile = false, authRecoverIntent = e.intent) }
                 } else {

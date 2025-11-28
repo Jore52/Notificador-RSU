@@ -183,17 +183,45 @@ fun DatesAndDeadlinesCard(uiState: AddEditProjectUiState, viewModel: AddEditProj
 }
 
 @Composable
-fun ApprovalDocumentCard(uiState: AddEditProjectUiState, viewModel: AddEditProjectViewModel, fileNameResolver: FileNameResolver) {
-    val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { viewModel.onFileAttached(it, isDialog = false) } }
+fun ApprovalDocumentCard(
+    uiState: AddEditProjectUiState,
+    viewModel: AddEditProjectViewModel,
+    fileNameResolver: FileNameResolver
+) {
+    val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { viewModel.onFileAttached(it, isDialog = false) }
+    }
     val project = uiState.project
+
     FormSectionCard(title = "Documento de Aprobación", icon = Icons.Default.AttachFile) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { filePickerLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth(), enabled = !uiState.isUploadingFile) { if (uiState.isUploadingFile && !uiState.isConditionDialogVisible) CircularProgressIndicator(modifier = Modifier.size(ButtonDefaults.IconSize)) else { Icon(Icons.Default.FileUpload, null); Spacer(Modifier.size(8.dp)); Text("Adjuntar Documento") } }
-            project.attachedFileUris.forEach { url -> FileItem(fileName = remember(url) { fileNameResolver.getFileName(Uri.parse(url)) }, onRemove = { viewModel.onFileRemoved(url, isDialog = false) }) }
+            OutlinedButton(
+                onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !uiState.isUploadingFile
+            ) {
+                if (uiState.isUploadingFile && !uiState.isConditionDialogVisible) {
+                    CircularProgressIndicator(modifier = Modifier.size(ButtonDefaults.IconSize))
+                } else {
+                    Icon(Icons.Default.FileUpload, null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                    Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+                    Text("Adjuntar Documento")
+                }
+            }
+
+            // Muestra la lista de archivos parseando el formato "Nombre|URL"
+            project.attachedFileUris.forEach { uriString ->
+                val parts = uriString.split("|")
+                val displayName = if (parts.size > 1) parts[0] else "Documento (Ver)"
+
+                FileItem(
+                    fileName = displayName,
+                    onRemove = { viewModel.onFileRemoved(uriString, isDialog = false) }
+                )
+            }
         }
     }
 }
-
 @Composable
 fun AutomaticNotifierCard(uiState: AddEditProjectUiState, viewModel: AddEditProjectViewModel) {
     val project = uiState.project
@@ -218,25 +246,113 @@ fun ConditionItem(condition: ConditionModel, onEdit: () -> Unit, onDelete: () ->
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConditionDialog(condition: ConditionModel, isUploadingFile: Boolean, fileNameResolver: FileNameResolver, onDismiss: () -> Unit, onSave: () -> Unit, onConditionChange: (ConditionModel) -> Unit, onFileAttached: (Uri) -> Unit, onFileRemoved: (String) -> Unit) {
-    val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> uris.forEach(onFileAttached) }
+fun ConditionDialog(
+    condition: ConditionModel,
+    isUploadingFile: Boolean,
+    fileNameResolver: FileNameResolver,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+    onConditionChange: (ConditionModel) -> Unit,
+    onFileAttached: (Uri) -> Unit,
+    onFileRemoved: (String) -> Unit
+) {
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        uris.forEach(onFileAttached)
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Editar Condición") },
         confirmButton = { Button(onClick = onSave) { Text("Guardar") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = condition.name, onValueChange = { onConditionChange(condition.copy(name = it)) }, label = { Text("Nombre") }, modifier = Modifier.fillMaxWidth())
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = condition.deadlineDays.toString(), onValueChange = { if (it.all { char -> char.isDigit() }) onConditionChange(condition.copy(deadlineDays = it.toIntOrNull() ?: 0)) }, label = { Text("Días") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
-                    OperatorDropdown(selectedOperator = condition.operator, onOperatorChange = { onConditionChange(condition.copy(operator = it)) }, modifier = Modifier.weight(2f))
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // 1. Nombre de la Regla
+                OutlinedTextField(
+                    value = condition.name,
+                    onValueChange = { onConditionChange(condition.copy(name = it)) },
+                    label = { Text("Nombre de la regla") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // 2. Condición de Plazo (Días + Operador)
+                Text("Condición de Plazo", style = MaterialTheme.typography.titleSmall)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = condition.deadlineDays.toString(),
+                        onValueChange = {
+                            if (it.all { char -> char.isDigit() }) {
+                                onConditionChange(condition.copy(deadlineDays = it.toIntOrNull() ?: 0))
+                            }
+                        },
+                        label = { Text("Días") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    OperatorDropdown(
+                        selectedOperator = condition.operator,
+                        onOperatorChange = { onConditionChange(condition.copy(operator = it)) },
+                        modifier = Modifier.weight(2f)
+                    )
                 }
-                FrequencyDropdown(selectedFrequency = condition.frequency, onFrequencyChange = { onConditionChange(condition.copy(frequency = it)) })
-                OutlinedTextField(value = condition.subject, onValueChange = { onConditionChange(condition.copy(subject = it)) }, label = { Text("Asunto") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = condition.body, onValueChange = { onConditionChange(condition.copy(body = it)) }, label = { Text("Mensaje") }, modifier = Modifier.fillMaxWidth().height(150.dp))
-                OutlinedButton(onClick = { filePickerLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth(), enabled = !isUploadingFile) { if (isUploadingFile) CircularProgressIndicator(modifier = Modifier.size(ButtonDefaults.IconSize)) else { Icon(Icons.Default.AttachFile, null); Spacer(Modifier.size(8.dp)); Text("Adjuntar Archivos") } }
-                condition.attachmentUris.forEach { url -> FileItem(fileName = fileNameResolver.getFileName(Uri.parse(url)), onRemove = { onFileRemoved(url) }) }
+
+                // 3. Frecuencia
+                Text("Frecuencia de Envío", style = MaterialTheme.typography.titleSmall)
+                FrequencyDropdown(
+                    selectedFrequency = condition.frequency,
+                    onFrequencyChange = { onConditionChange(condition.copy(frequency = it)) }
+                )
+
+                // 4. Contenido del Correo
+                Text("Contenido del Correo", style = MaterialTheme.typography.titleSmall)
+                OutlinedTextField(
+                    value = condition.subject,
+                    onValueChange = { onConditionChange(condition.copy(subject = it)) },
+                    label = { Text("Asunto") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = condition.body,
+                    onValueChange = { onConditionChange(condition.copy(body = it)) },
+                    label = { Text("Cuerpo del Mensaje") },
+                    modifier = Modifier.fillMaxWidth().height(150.dp)
+                )
+
+                // 5. Adjuntos
+                Text("Adjuntos", style = MaterialTheme.typography.titleSmall)
+                OutlinedButton(
+                    onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isUploadingFile
+                ) {
+                    if (isUploadingFile) {
+                        CircularProgressIndicator(modifier = Modifier.size(ButtonDefaults.IconSize))
+                    } else {
+                        Icon(Icons.Default.AttachFile, null)
+                        Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+                        Text("Adjuntar Archivos")
+                    }
+                }
+
+                // Lista de archivos adjuntos (Parseando "Nombre|URL")
+                condition.attachmentUris.forEach { uriString ->
+                    val parts = uriString.split("|")
+                    val displayName = if (parts.size > 1) parts[0] else "Documento (Ver)"
+
+                    FileItem(
+                        fileName = displayName,
+                        onRemove = { onFileRemoved(uriString) } // Enviamos el string completo para borrar
+                    )
+                }
             }
         }
     )
