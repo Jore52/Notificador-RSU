@@ -259,14 +259,15 @@ class AddEditProjectViewModel @Inject constructor(
                 val historyRef = firebaseDatabase.reference
                     .child("users").child(userId).child("sent_emails").push()
 
-                val firebaseMap = mapOf(
+                // CORRECCIÓN REALIZADA AQUÍ: Se especifica <String, Any> explícitamente
+                val firebaseMap = mapOf<String, Any>(
                     "projectId" to project.id,
                     "projectName" to project.name,
                     "recipient" to project.coordinatorEmail,
                     "subject" to subject,
                     "sentAt" to sentAt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-                    "success" to isSuccess,
-                    "error" to errorMessage ?: ""
+                    "success" to isSuccess, // Boolean
+                    "error" to (errorMessage ?: "") // String
                 )
                 historyRef.setValue(firebaseMap).await()
                 Log.d("DEBUG_NOTIFICADOR", "Historial guardado en Firebase exitosamente.")
