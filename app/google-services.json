@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "387432851598",
+    "project_id": "notificador-rsu",
+    "storage_bucket": "notificador-rsu.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:387432851598:android:ffd3f1c1913c8bb62841df",
+        "android_client_info": {
+          "package_name": "com.example.notificadorrsuv5"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "387432851598-1u7786abcn0t21gpg9mt4oaq8nk8j230.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.notificadorrsuv5",
+            "certificate_hash": "b5f045e92c4f5887ac54ee5ac9efa2e2d3e1fb09"
+          }
+        },
+        {
+          "client_id": "387432851598-mpttvop5pbvrbrcu8gop4iq6b8ke3vdl.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDSptEnvvwzzcGdADjjqUdGENQysWm9RY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "387432851598-mpttvop5pbvrbrcu8gop4iq6b8ke3vdl.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
