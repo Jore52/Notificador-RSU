@@ -16,6 +16,7 @@ import com.example.notificadorrsuv5.data.local.SentEmailEntity
 import com.example.notificadorrsuv5.domain.model.*
 import com.example.notificadorrsuv5.domain.repository.AuthRepository
 import com.example.notificadorrsuv5.domain.repository.ProjectRepository
+import com.example.notificadorrsuv5.domain.util.FileNameResolver
 import com.example.notificadorrsuv5.domain.util.GmailApiService
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.firebase.database.FirebaseDatabase
@@ -23,6 +24,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,7 +38,6 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 import javax.inject.Inject
 
-// Enum para controlar el color del banner (Verde/Rojo)
 enum class NotificationType { SUCCESS, ERROR }
 
 data class AddEditProjectUiState(
@@ -47,7 +48,6 @@ data class AddEditProjectUiState(
     val isConditionDialogVisible: Boolean = false,
     val editableCondition: ConditionModel? = null,
     val isUploadingFile: Boolean = false,
-    // CAMPOS PARA LA NOTIFICACIÓN SUPERIOR (BANNER)
     val notificationMessage: String? = null,
     val notificationType: NotificationType = NotificationType.SUCCESS
 )
@@ -61,6 +61,7 @@ class AddEditProjectViewModel @Inject constructor(
     private val gmailApiService: GmailApiService,
     private val sentEmailDao: SentEmailDao,
     private val firebaseDatabase: FirebaseDatabase,
+    private val fileNameResolver: FileNameResolver,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -68,6 +69,8 @@ class AddEditProjectViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(AddEditProjectUiState())
     val uiState: StateFlow<AddEditProjectUiState> = _uiState.asStateFlow()
+
+    private var notificationJob: Job? = null
 
     init {
         if (projectId != null && projectId != "-1" && projectId.isNotBlank()) {
@@ -98,7 +101,6 @@ class AddEditProjectViewModel @Inject constructor(
         _uiState.update { it.copy(project = project) }
     }
 
-    // --- FUNCIÓN PRINCIPAL DE GUARDADO ---
     fun onSaveProject() {
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true) }
@@ -110,17 +112,9 @@ class AddEditProjectViewModel @Inject constructor(
                 return@launch
             }
 
-            Log.d("DEBUG_NOTIFICADOR", "Guardando proyecto: ${project.name}")
-
             when (val result = projectRepository.saveProject(project)) {
                 is Response.Success<*> -> {
-                    Log.d("DEBUG_NOTIFICADOR", "Proyecto guardado. Iniciando flujo de éxito.")
-
-                    // 1. Mostrar Banner de Éxito
                     showNotification("Proyecto guardado correctamente", NotificationType.SUCCESS)
-
-                    // 2. Ejecutar envío de correo en Segundo Plano (Independiente del ciclo de vida de la pantalla)
-                    // Usamos SupervisorJob + IO para que si la pantalla se cierra, esto siga vivo.
                     CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                         try {
                             performImmediateConditionCheck(project)
@@ -128,15 +122,10 @@ class AddEditProjectViewModel @Inject constructor(
                             Log.e("DEBUG_NOTIFICADOR", "Error crítico en proceso de fondo", e)
                         }
                     }
-
-                    // 3. Esperar 2 segundos para que el usuario vea el mensaje
-                    delay(2000)
-
-                    // 4. Activar navegación de salida
+                    delay(2500)
                     _uiState.update { it.copy(isProjectSaved = true, isSaving = false) }
                 }
                 is Response.Failure -> {
-                    Log.e("DEBUG_NOTIFICADOR", "Fallo al guardar proyecto en BD")
                     _uiState.update { it.copy(isSaving = false) }
                     showNotification("Error al guardar: ${result.e?.message}", NotificationType.ERROR)
                 }
@@ -145,32 +134,18 @@ class AddEditProjectViewModel @Inject constructor(
         }
     }
 
-    // --- LÓGICA DE NOTIFICACIÓN (BANNER) ---
     private fun showNotification(message: String, type: NotificationType) {
-        viewModelScope.launch {
-            // Mostrar mensaje
+        notificationJob?.cancel()
+        notificationJob = viewModelScope.launch {
             _uiState.update { it.copy(notificationMessage = message, notificationType = type) }
-            // Esperar 2 segundos
-            delay(2000)
-            // Ocultar mensaje (si seguimos en la pantalla)
+            delay(3000)
             _uiState.update { it.copy(notificationMessage = null) }
         }
     }
 
-    // --- ENVÍO DE CORREOS Y VERIFICACIÓN ---
     private suspend fun performImmediateConditionCheck(project: Project) {
-        Log.d("DEBUG_NOTIFICADOR", "--- INICIO CHECK CONDITIONS ---")
-
         val googleSignInAccount = GoogleSignIn.getLastSignedInAccount(context)
-        if (googleSignInAccount == null) {
-            Log.e("DEBUG_NOTIFICADOR", "ERROR: No hay cuenta de Google logueada.")
-            return // No podemos actualizar UI desde aquí con seguridad si la pantalla ya cerró, solo log.
-        }
-
-        if (!project.notificationsEnabled) {
-            Log.d("DEBUG_NOTIFICADOR", "AVISO: Las notificaciones están DESACTIVADAS.")
-            return
-        }
+        if (googleSignInAccount == null || !project.notificationsEnabled) return
 
         val currentDeadlineDays = project.deadlineDays
 
@@ -184,8 +159,6 @@ class AddEditProjectViewModel @Inject constructor(
             }
 
             if (isMet) {
-                Log.d("DEBUG_NOTIFICADOR", "   Condición cumplida: ${condition.name}")
-
                 val subject = condition.subject
                 val body = condition.body.replacePlaceholders(project)
 
@@ -198,7 +171,6 @@ class AddEditProjectViewModel @Inject constructor(
                         condition.attachmentUris
                     )
 
-                    // Guardar en historial independientemente del resultado
                     saveEmailToHistory(
                         project = project,
                         conditionId = condition.id,
@@ -209,18 +181,17 @@ class AddEditProjectViewModel @Inject constructor(
                     )
 
                     if (emailResult.isSuccess) {
-                        Log.d("DEBUG_NOTIFICADOR", "   ¡ÉXITO! Correo enviado.")
                         playSound(R.raw.success_sound)
+                        showNotification("Correo de notificación enviado", NotificationType.SUCCESS)
                     } else {
-                        Log.e("DEBUG_NOTIFICADOR", "   FALLO en envío: ${emailResult.exceptionOrNull()?.message}")
                         playSound(R.raw.error_sound)
+                        showNotification("Error enviando correo: ${emailResult.exceptionOrNull()?.message}", NotificationType.ERROR)
                     }
                 } catch (e: Exception) {
-                    Log.e("DEBUG_NOTIFICADOR", "   EXCEPCIÓN CRÍTICA AL ENVIAR: ${e.message}")
+                    Log.e("DEBUG_NOTIFICADOR", "Excepción envío", e)
                 }
             }
         }
-        Log.d("DEBUG_NOTIFICADOR", "--- FIN CHECK CONDITIONS ---")
     }
 
     private suspend fun saveEmailToHistory(
@@ -232,8 +203,6 @@ class AddEditProjectViewModel @Inject constructor(
         errorMessage: String?
     ) {
         val sentAt = LocalDateTime.now()
-
-        // 1. Guardar en ROOM (Localmente)
         try {
             val entity = SentEmailEntity(
                 projectId = project.id,
@@ -246,33 +215,28 @@ class AddEditProjectViewModel @Inject constructor(
                 errorMessage = errorMessage
             )
             sentEmailDao.insertSentEmail(entity)
-            Log.d("DEBUG_NOTIFICADOR", "Historial guardado en Room exitosamente.")
         } catch (e: Exception) {
-            Log.e("DEBUG_NOTIFICADOR", "Error guardando en Room: ${e.message}")
+            Log.e("DEBUG_NOTIFICADOR", "Error Room: ${e.message}")
         }
 
-        // 2. Guardar en FIREBASE (Nube)
-        // Verificamos si hay usuario autenticado antes de intentar escribir
         val userId = authRepository.currentUser.value?.uid
         if (userId != null) {
             try {
                 val historyRef = firebaseDatabase.reference
                     .child("users").child(userId).child("sent_emails").push()
 
-                // CORRECCIÓN REALIZADA AQUÍ: Se especifica <String, Any> explícitamente
                 val firebaseMap = mapOf<String, Any>(
                     "projectId" to project.id,
                     "projectName" to project.name,
                     "recipient" to project.coordinatorEmail,
                     "subject" to subject,
                     "sentAt" to sentAt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-                    "success" to isSuccess, // Boolean
-                    "error" to (errorMessage ?: "") // String
+                    "success" to isSuccess,
+                    "error" to (errorMessage ?: "")
                 )
                 historyRef.setValue(firebaseMap).await()
-                Log.d("DEBUG_NOTIFICADOR", "Historial guardado en Firebase exitosamente.")
             } catch (e: Exception) {
-                Log.e("DEBUG_NOTIFICADOR", "Error guardando en Firebase: ${e.message}")
+                Log.e("DEBUG_NOTIFICADOR", "Error Firebase: ${e.message}")
             }
         }
     }
@@ -283,7 +247,7 @@ class AddEditProjectViewModel @Inject constructor(
             mediaPlayer.setOnCompletionListener { it.release() }
             mediaPlayer.start()
         } catch (e: Exception) {
-            Log.e("DEBUG_NOTIFICADOR", "No se pudo reproducir el sonido", e)
+            Log.e("DEBUG_NOTIFICADOR", "No se pudo reproducir sonido", e)
         }
     }
 
@@ -296,7 +260,7 @@ class AddEditProjectViewModel @Inject constructor(
             .replace("{fechaInicio}", project.startDate?.format(formatter) ?: "N/A")
     }
 
-    // --- GESTIÓN DEL DIÁLOGO Y ARCHIVOS ---
+    // --- DIALOGOS Y ARCHIVOS ---
     fun onShowConditionDialog(condition: ConditionModel? = null) {
         val newEditableCondition = condition ?: ConditionModel(id = UUID.randomUUID().toString())
         _uiState.update { it.copy(isConditionDialogVisible = true, editableCondition = newEditableCondition) }
@@ -314,7 +278,6 @@ class AddEditProjectViewModel @Inject constructor(
         val conditionToSave = _uiState.value.editableCondition ?: return
         val currentProject = _uiState.value.project
         val currentConditions = currentProject.conditions.toMutableList()
-
         val existingIndex = currentConditions.indexOfFirst { it.id == conditionToSave.id }
 
         if (existingIndex != -1) {
@@ -322,7 +285,6 @@ class AddEditProjectViewModel @Inject constructor(
         } else {
             currentConditions.add(conditionToSave)
         }
-
         onProjectChange(currentProject.copy(conditions = currentConditions.sortedBy { it.name }))
         onDismissConditionDialog()
     }
@@ -344,9 +306,20 @@ class AddEditProjectViewModel @Inject constructor(
 
         val folderName = if (isDialog) "uploads/${user.uid}/conditions" else "uploads/${user.uid}/projects"
 
+        // 1. Obtener nombre y extensión original
+        val originalFileName = fileNameResolver.getFileName(uri)
+        val extension = originalFileName.substringAfterLast('.', "")
+
+        // 2. Generar nombre único manteniendo la extensión
+        val uniqueName = UUID.randomUUID().toString()
+        val publicIdWithExtension = if (extension.isNotEmpty()) "$uniqueName.$extension" else uniqueName
+
         mediaManager.upload(uri)
             .unsigned("notificador_preset")
             .option("folder", folderName)
+            .option("resource_type", "raw")
+            .option("public_id", publicIdWithExtension)
+            .option("access_mode", "public") // <--- SOLUCIÓN AL ERROR 401: Forzar acceso público
             .callback(object : UploadCallback {
                 override fun onStart(requestId: String) {}
                 override fun onProgress(requestId: String, bytes: Long, totalBytes: Long) {}
@@ -354,6 +327,7 @@ class AddEditProjectViewModel @Inject constructor(
                 override fun onSuccess(requestId: String, resultData: Map<*, *>) {
                     val downloadUrl = resultData["secure_url"] as? String
                     if (downloadUrl != null) {
+                        Log.d("DEBUG_UPLOAD", "Archivo subido exitosamente: $downloadUrl")
                         if (isDialog) {
                             val currentCondition = _uiState.value.editableCondition
                             if (currentCondition != null) {
@@ -378,6 +352,7 @@ class AddEditProjectViewModel @Inject constructor(
 
                 override fun onError(requestId: String, error: ErrorInfo) {
                     _uiState.update { it.copy(isUploadingFile = false) }
+                    Log.e("DEBUG_UPLOAD", "Error Cloudinary: ${error.description}")
                     showNotification("Error al subir: ${error.description}", NotificationType.ERROR)
                 }
 

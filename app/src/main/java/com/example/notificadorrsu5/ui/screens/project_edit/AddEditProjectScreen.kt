@@ -46,11 +46,14 @@ fun AddEditProjectScreen(
     val uiState by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Manejo de Notificaciones (Éxito o Error desde el ViewModel)
+    // --- MANEJO DE NOTIFICACIONES (SNACKBAR) ---
+    // Escucha cambios en notificationMessage (Éxito o Error)
     LaunchedEffect(uiState.notificationMessage) {
         uiState.notificationMessage?.let { message ->
+            snackbarHostState.currentSnackbarData?.dismiss()
             snackbarHostState.showSnackbar(
                 message = message,
+                duration = SnackbarDuration.Short,
                 withDismissAction = true
             )
         }
@@ -64,7 +67,21 @@ fun AddEditProjectScreen(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        // Configuración del Snackbar con colores personalizados (Verde/Rojo)
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { data ->
+                val containerColor = if (uiState.notificationType == NotificationType.SUCCESS)
+                    SuccessGreen
+                else
+                    MaterialTheme.colorScheme.error
+
+                Snackbar(
+                    snackbarData = data,
+                    containerColor = containerColor,
+                    contentColor = Color.White
+                )
+            }
+        },
         topBar = {
             TopAppBar(
                 title = {
@@ -114,9 +131,10 @@ fun AddEditProjectScreen(
         }
 
         // --- DIÁLOGO DE EDICIÓN DE CONDICIONES ---
-        if (uiState.isConditionDialogVisible && uiState.editableCondition != null) {
+        val currentCondition = uiState.editableCondition
+        if (uiState.isConditionDialogVisible && currentCondition != null) {
             ConditionDialog(
-                condition = uiState.editableCondition!!,
+                condition = currentCondition,
                 isUploadingFile = uiState.isUploadingFile,
                 fileNameResolver = fileNameResolver,
                 onDismiss = viewModel::onDismissConditionDialog,
@@ -274,7 +292,6 @@ fun DatesAndDeadlinesCard(uiState: AddEditProjectUiState, viewModel: AddEditProj
                 )
             }
 
-            // FILA 2: Días informe y Fecha final
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val daysText = if (project.deadlineDays == 0L && project.endDate == null) "Días de plazo" else project.deadlineDays.toString()
 
