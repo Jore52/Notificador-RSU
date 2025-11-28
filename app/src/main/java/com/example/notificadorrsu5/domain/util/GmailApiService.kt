@@ -39,9 +39,9 @@ class GmailApiService @Inject constructor(
         attachmentUris: List<String>
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            // ... (Configuración de credenciales igual que antes) ...
             val credential = GoogleAccountCredential.usingOAuth2(context, setOf(GmailScopes.GMAIL_SEND))
                 .setSelectedAccount(account.account)
-
             val gmailService = Gmail.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
                 .setApplicationName("Notificador RSU V5").build()
 
@@ -53,20 +53,21 @@ class GmailApiService @Inject constructor(
             mimeMessage.subject = subject
 
             val multipart = MimeMultipart("mixed")
-
             val messageBodyPart = MimeBodyPart()
-            messageBodyPart.setContent(body, "text/plain; charset=utf-8")
-            multipart.addBodyPart(messageBodyPart)
 
-            attachmentUris.forEach { uriString ->
-                val uri = Uri.parse(uriString)
-                val attachmentPart = MimeBodyPart()
-                val dataSource = createDataSourceFromUri(uri)
-                attachmentPart.dataHandler = DataHandler(dataSource)
-                attachmentPart.fileName = getFileName(uri)
-                attachmentPart.disposition = MimeBodyPart.ATTACHMENT
-                multipart.addBodyPart(attachmentPart)
+            // --- CAMBIO: Ponemos los enlaces en el texto en vez de adjuntar ---
+            var finalBody = body
+            if (attachmentUris.isNotEmpty()) {
+                finalBody += "\n\n--- Documentos Adjuntos (Enlaces) ---\n"
+                attachmentUris.forEachIndexed { index, url ->
+                    finalBody += "• Archivo ${index + 1}: $url\n"
+                }
             }
+            messageBodyPart.setContent(finalBody, "text/plain; charset=utf-8")
+            multipart.addBodyPart(messageBodyPart)
+            // ----------------------------------------------------------------
+
+            // YA NO HACEMOS EL BUCLE DE "attachmentPart" QUE DESCARGABA Y ADJUNTABA
 
             mimeMessage.setContent(multipart)
 
